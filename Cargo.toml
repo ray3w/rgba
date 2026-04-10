@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/arm7tdmi",
+    "crates/core",
+    "crates/utils",
+    "platform/desktop",
+]
+
+[workspace.package]
+edition = "2021"

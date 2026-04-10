@@ -1,0 +1,8 @@
+[package]
+name = "rgba-core"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+rgba-arm7tdmi = { path = "../arm7tdmi" }
+rgba-utils = { path = "../utils" }
