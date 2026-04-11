@@ -1,7 +1,0 @@
-/target
-roms/*.gba
-roms/*.bin
-roms/*.sav
-*.bios
-blog/
-ROADMAP.md
