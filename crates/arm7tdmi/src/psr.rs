@@ -34,6 +34,10 @@ impl Mode {
     pub const fn has_spsr(self) -> bool {
         !matches!(self, Self::User | Self::System)
     }
+
+    pub const fn is_privileged(self) -> bool {
+        !matches!(self, Self::User)
+    }
 }
 
 /// Program Status Register wrapper.

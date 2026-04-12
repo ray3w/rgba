@@ -6,6 +6,7 @@
 //! `BusInterface`.
 
 pub mod alu;
+pub mod arm;
 pub mod exception;
 pub mod psr;
 pub mod reg;
@@ -59,12 +60,20 @@ impl Arm7tdmi {
         }
     }
 
-    /// Placeholder entry point for Phase 1b/1c.
-    ///
-    /// Instruction decoding/execution lands in later sub-phases. Returning zero
-    /// cycles keeps the method callable without pretending execution exists yet.
-    pub fn step<B: BusInterface>(&mut self, _bus: &mut B) -> u32 {
-        0
+    /// Phase 1b executes ARM-state instructions. Thumb-state execution lands in
+    /// Phase 1c.
+    pub fn step<B: BusInterface>(&mut self, bus: &mut B) -> u32 {
+        assert!(!self.is_thumb(), "thumb-state execution lands in phase 1c");
+
+        let fetch_pc = self.pc();
+        let opcode = bus.read_32(fetch_pc);
+        let outcome = arm::execute(self, bus, opcode, fetch_pc);
+
+        if !outcome.wrote_pc {
+            self.set_pc(fetch_pc.wrapping_add(4));
+        }
+
+        outcome.cycles
     }
 
     pub fn mode(&self) -> Mode {
