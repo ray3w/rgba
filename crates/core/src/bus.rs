@@ -15,9 +15,8 @@ const IWRAM_BASE: u32 = 0x0300_0000;
 
 /// The shared address bus for the whole GBA.
 ///
-/// Phase 2 keeps this intentionally small: enough to route CPU accesses to
-/// BIOS, WRAM and Game Pak ROM, while reserving storage for future MMIO/PPU
-/// work.
+/// The bus owns the machine-visible storage regions and routes CPU accesses to
+/// memory, cartridge ROM, MMIO, and the early video memory blocks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bus {
     memory: Memory,
@@ -62,6 +61,16 @@ impl Bus {
         &mut self.io
     }
 
+    pub fn vram(&self) -> &[u8] {
+        &self.vram[..]
+    }
+
+    pub fn with_video<R>(&mut self, f: impl FnOnce(&mut IoRegs, &[u8]) -> R) -> R {
+        let io = &mut self.io;
+        let vram = &self.vram[..];
+        f(io, vram)
+    }
+
     pub fn cartridge(&self) -> &Cartridge {
         &self.cartridge
     }
@@ -72,7 +81,10 @@ impl Bus {
             0x02 => self.memory.read_ewram_32(addr - EWRAM_BASE),
             0x03 => self.memory.read_iwram_32(addr - IWRAM_BASE),
             0x04 => self.io.read_32(addr),
-            0x05 => read_u32(&self.palette[..], (addr & (PALETTE_SIZE as u32 - 1)) as usize),
+            0x05 => read_u32(
+                &self.palette[..],
+                (addr & (PALETTE_SIZE as u32 - 1)) as usize,
+            ),
             0x06 => read_u32(&self.vram[..], vram_offset(addr)),
             0x07 => read_u32(&self.oam[..], (addr & (OAM_SIZE as u32 - 1)) as usize),
             0x08..=0x0d => self.cartridge.read_32(addr),
@@ -108,7 +120,10 @@ impl BusInterface for Bus {
             0x02 => self.memory.read_ewram_16(addr - EWRAM_BASE),
             0x03 => self.memory.read_iwram_16(addr - IWRAM_BASE),
             0x04 => self.io.read_16(addr),
-            0x05 => read_u16(&self.palette[..], (addr & (PALETTE_SIZE as u32 - 1)) as usize),
+            0x05 => read_u16(
+                &self.palette[..],
+                (addr & (PALETTE_SIZE as u32 - 1)) as usize,
+            ),
             0x06 => read_u16(&self.vram[..], vram_offset(addr)),
             0x07 => read_u16(&self.oam[..], (addr & (OAM_SIZE as u32 - 1)) as usize),
             0x08..=0x0d => self.cartridge.read_16(addr),
@@ -123,7 +138,10 @@ impl BusInterface for Bus {
             0x02 => self.memory.read_ewram_32(addr - EWRAM_BASE),
             0x03 => self.memory.read_iwram_32(addr - IWRAM_BASE),
             0x04 => self.io.read_32(addr),
-            0x05 => read_u32(&self.palette[..], (addr & (PALETTE_SIZE as u32 - 1)) as usize),
+            0x05 => read_u32(
+                &self.palette[..],
+                (addr & (PALETTE_SIZE as u32 - 1)) as usize,
+            ),
             0x06 => read_u32(&self.vram[..], vram_offset(addr)),
             0x07 => read_u32(&self.oam[..], (addr & (OAM_SIZE as u32 - 1)) as usize),
             0x08..=0x0d => self.cartridge.read_32(addr),
@@ -162,9 +180,17 @@ impl BusInterface for Bus {
                 val,
             ),
             0x06 => write_u16(&mut self.vram[..], vram_offset(addr), val),
-            0x07 => write_u16(&mut self.oam[..], (addr & (OAM_SIZE as u32 - 1)) as usize, val),
+            0x07 => write_u16(
+                &mut self.oam[..],
+                (addr & (OAM_SIZE as u32 - 1)) as usize,
+                val,
+            ),
             0x08..=0x0d => {}
-            0x0e | 0x0f => write_u16(&mut self.sram[..], (addr & (SRAM_SIZE as u32 - 1)) as usize, val),
+            0x0e | 0x0f => write_u16(
+                &mut self.sram[..],
+                (addr & (SRAM_SIZE as u32 - 1)) as usize,
+                val,
+            ),
             _ => {}
         }
     }
@@ -181,9 +207,17 @@ impl BusInterface for Bus {
                 val,
             ),
             0x06 => write_u32(&mut self.vram[..], vram_offset(addr), val),
-            0x07 => write_u32(&mut self.oam[..], (addr & (OAM_SIZE as u32 - 1)) as usize, val),
+            0x07 => write_u32(
+                &mut self.oam[..],
+                (addr & (OAM_SIZE as u32 - 1)) as usize,
+                val,
+            ),
             0x08..=0x0d => {}
-            0x0e | 0x0f => write_u32(&mut self.sram[..], (addr & (SRAM_SIZE as u32 - 1)) as usize, val),
+            0x0e | 0x0f => write_u32(
+                &mut self.sram[..],
+                (addr & (SRAM_SIZE as u32 - 1)) as usize,
+                val,
+            ),
             _ => {}
         }
     }

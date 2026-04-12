@@ -1,5 +1,6 @@
 const DISPCNT_ADDR: u32 = 0x0400_0000;
 const DISPSTAT_ADDR: u32 = 0x0400_0004;
+const VCOUNT_ADDR: u32 = 0x0400_0006;
 const KEYINPUT_ADDR: u32 = 0x0400_0130;
 const IE_ADDR: u32 = 0x0400_0200;
 const IF_ADDR: u32 = 0x0400_0202;
@@ -8,11 +9,14 @@ const IME_ADDR: u32 = 0x0400_0208;
 
 const DISPSTAT_VBLANK: u16 = 1 << 0;
 const DISPSTAT_HBLANK: u16 = 1 << 1;
+const DISPSTAT_VCOUNT_MATCH: u16 = 1 << 2;
 const DISPSTAT_VBLANK_IRQ_ENABLE: u16 = 1 << 3;
 const DISPSTAT_HBLANK_IRQ_ENABLE: u16 = 1 << 4;
+const DISPSTAT_VCOUNT_IRQ_ENABLE: u16 = 1 << 5;
 
 pub const IRQ_VBLANK: u16 = 1 << 0;
 pub const IRQ_HBLANK: u16 = 1 << 1;
+pub const IRQ_VCOUNT: u16 = 1 << 2;
 pub const IRQ_TIMER0: u16 = 1 << 3;
 pub const IRQ_DMA0: u16 = 1 << 8;
 
@@ -25,6 +29,7 @@ pub struct IoRegs {
     waitcnt: u16,
     dispcnt: u16,
     dispstat: u16,
+    vcount: u16,
     keyinput: u16,
 }
 
@@ -43,6 +48,7 @@ impl IoRegs {
             waitcnt: 0,
             dispcnt: 0,
             dispstat: 0,
+            vcount: 0,
             keyinput: 0x03ff,
         }
     }
@@ -71,8 +77,20 @@ impl IoRegs {
         self.dispstat
     }
 
+    pub fn vcount(&self) -> u16 {
+        self.vcount
+    }
+
     pub fn keyinput(&self) -> u16 {
         self.keyinput
+    }
+
+    pub fn display_mode(&self) -> u16 {
+        self.dispcnt & 0x0007
+    }
+
+    pub fn bg2_enabled(&self) -> bool {
+        (self.dispcnt & (1 << 10)) != 0
     }
 
     pub fn ime_enabled(&self) -> bool {
@@ -81,6 +99,22 @@ impl IoRegs {
 
     pub fn set_keyinput(&mut self, value: u16) {
         self.keyinput = value & 0x03ff;
+    }
+
+    pub fn set_vcount(&mut self, value: u16) {
+        let compare = (self.dispstat >> 8) & 0x00ff;
+        let had_match = (self.dispstat & DISPSTAT_VCOUNT_MATCH) != 0;
+
+        self.vcount = value & 0x00ff;
+
+        if self.vcount == compare {
+            self.dispstat |= DISPSTAT_VCOUNT_MATCH;
+            if !had_match && (self.dispstat & DISPSTAT_VCOUNT_IRQ_ENABLE) != 0 {
+                self.request_interrupt(IRQ_VCOUNT);
+            }
+        } else {
+            self.dispstat &= !DISPSTAT_VCOUNT_MATCH;
+        }
     }
 
     pub fn request_interrupt(&mut self, mask: u16) {
@@ -122,6 +156,7 @@ impl IoRegs {
         match addr & !1 {
             DISPCNT_ADDR => self.dispcnt,
             DISPSTAT_ADDR => self.dispstat,
+            VCOUNT_ADDR => self.vcount,
             KEYINPUT_ADDR => self.keyinput,
             IE_ADDR => self.ie,
             IF_ADDR => self.if_,
@@ -154,7 +189,9 @@ impl IoRegs {
             DISPSTAT_ADDR => {
                 let status = self.dispstat & 0x0007;
                 self.dispstat = status | (val & !0x0007);
+                self.set_vcount(self.vcount);
             }
+            VCOUNT_ADDR => {}
             KEYINPUT_ADDR => {}
             IE_ADDR => self.ie = val,
             IF_ADDR => self.if_ &= !val,
@@ -172,7 +209,10 @@ impl IoRegs {
 
 #[cfg(test)]
 mod tests {
-    use super::{IoRegs, DISPSTAT_ADDR, IE_ADDR, IF_ADDR, IME_ADDR, IRQ_VBLANK, KEYINPUT_ADDR, WAITCNT_ADDR};
+    use super::{
+        IoRegs, DISPSTAT_ADDR, IE_ADDR, IF_ADDR, IME_ADDR, IRQ_VBLANK, IRQ_VCOUNT, KEYINPUT_ADDR,
+        VCOUNT_ADDR, WAITCNT_ADDR,
+    };
 
     #[test]
     fn ordinary_registers_round_trip() {
@@ -212,5 +252,31 @@ mod tests {
 
         assert_ne!(io.dispstat() & 1, 0);
         assert_ne!(io.if_() & IRQ_VBLANK, 0);
+    }
+
+    #[test]
+    fn vcount_register_tracks_current_scanline() {
+        let mut io = IoRegs::new();
+        io.set_vcount(37);
+
+        assert_eq!(io.read_16(VCOUNT_ADDR), 37);
+    }
+
+    #[test]
+    fn vcount_match_sets_status_and_requests_irq_once() {
+        let mut io = IoRegs::new();
+        io.write_16(DISPSTAT_ADDR, (1 << 5) | (12 << 8));
+
+        io.set_vcount(11);
+        assert_eq!(io.dispstat() & (1 << 2), 0);
+        assert_eq!(io.if_() & IRQ_VCOUNT, 0);
+
+        io.set_vcount(12);
+        assert_ne!(io.dispstat() & (1 << 2), 0);
+        assert_ne!(io.if_() & IRQ_VCOUNT, 0);
+
+        let flags = io.if_();
+        io.set_vcount(12);
+        assert_eq!(io.if_(), flags);
     }
 }
