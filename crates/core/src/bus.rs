@@ -1,9 +1,9 @@
 use rgba_arm7tdmi::BusInterface;
 
 use crate::cartridge::Cartridge;
+use crate::io::IoRegs;
 use crate::mem::{BiosLoadError, Memory};
 
-const IO_SIZE: usize = 0x400;
 const PALETTE_SIZE: usize = 0x400;
 const VRAM_SIZE: usize = 0x18000;
 const OAM_SIZE: usize = 0x400;
@@ -22,7 +22,7 @@ const IWRAM_BASE: u32 = 0x0300_0000;
 pub struct Bus {
     memory: Memory,
     cartridge: Cartridge,
-    io: Box<[u8; IO_SIZE]>,
+    io: IoRegs,
     palette: Box<[u8; PALETTE_SIZE]>,
     vram: Box<[u8; VRAM_SIZE]>,
     oam: Box<[u8; OAM_SIZE]>,
@@ -34,7 +34,7 @@ impl Bus {
         Self {
             memory: Memory::new(),
             cartridge,
-            io: Box::new([0; IO_SIZE]),
+            io: IoRegs::new(),
             palette: Box::new([0; PALETTE_SIZE]),
             vram: Box::new([0; VRAM_SIZE]),
             oam: Box::new([0; OAM_SIZE]),
@@ -54,6 +54,14 @@ impl Bus {
         self.memory.load_bios(bios)
     }
 
+    pub fn io(&self) -> &IoRegs {
+        &self.io
+    }
+
+    pub fn io_mut(&mut self) -> &mut IoRegs {
+        &mut self.io
+    }
+
     pub fn cartridge(&self) -> &Cartridge {
         &self.cartridge
     }
@@ -63,7 +71,7 @@ impl Bus {
             0x00 => self.memory.read_bios_32(addr - BIOS_BASE),
             0x02 => self.memory.read_ewram_32(addr - EWRAM_BASE),
             0x03 => self.memory.read_iwram_32(addr - IWRAM_BASE),
-            0x04 => read_u32(&self.io[..], (addr & (IO_SIZE as u32 - 1)) as usize),
+            0x04 => self.io.read_32(addr),
             0x05 => read_u32(&self.palette[..], (addr & (PALETTE_SIZE as u32 - 1)) as usize),
             0x06 => read_u32(&self.vram[..], vram_offset(addr)),
             0x07 => read_u32(&self.oam[..], (addr & (OAM_SIZE as u32 - 1)) as usize),
@@ -84,7 +92,7 @@ impl BusInterface for Bus {
             0x00 => self.memory.read_bios_8(addr - BIOS_BASE),
             0x02 => self.memory.read_ewram_8(addr - EWRAM_BASE),
             0x03 => self.memory.read_iwram_8(addr - IWRAM_BASE),
-            0x04 => self.io[(addr & (IO_SIZE as u32 - 1)) as usize],
+            0x04 => self.io.read_8(addr),
             0x05 => self.palette[(addr & (PALETTE_SIZE as u32 - 1)) as usize],
             0x06 => self.vram[vram_offset(addr)],
             0x07 => self.oam[(addr & (OAM_SIZE as u32 - 1)) as usize],
@@ -99,7 +107,7 @@ impl BusInterface for Bus {
             0x00 => self.memory.read_bios_16(addr - BIOS_BASE),
             0x02 => self.memory.read_ewram_16(addr - EWRAM_BASE),
             0x03 => self.memory.read_iwram_16(addr - IWRAM_BASE),
-            0x04 => read_u16(&self.io[..], (addr & (IO_SIZE as u32 - 1)) as usize),
+            0x04 => self.io.read_16(addr),
             0x05 => read_u16(&self.palette[..], (addr & (PALETTE_SIZE as u32 - 1)) as usize),
             0x06 => read_u16(&self.vram[..], vram_offset(addr)),
             0x07 => read_u16(&self.oam[..], (addr & (OAM_SIZE as u32 - 1)) as usize),
@@ -114,7 +122,7 @@ impl BusInterface for Bus {
             0x00 => self.memory.read_bios_32(addr - BIOS_BASE),
             0x02 => self.memory.read_ewram_32(addr - EWRAM_BASE),
             0x03 => self.memory.read_iwram_32(addr - IWRAM_BASE),
-            0x04 => read_u32(&self.io[..], (addr & (IO_SIZE as u32 - 1)) as usize),
+            0x04 => self.io.read_32(addr),
             0x05 => read_u32(&self.palette[..], (addr & (PALETTE_SIZE as u32 - 1)) as usize),
             0x06 => read_u32(&self.vram[..], vram_offset(addr)),
             0x07 => read_u32(&self.oam[..], (addr & (OAM_SIZE as u32 - 1)) as usize),
@@ -129,7 +137,7 @@ impl BusInterface for Bus {
             0x00 => {}
             0x02 => self.memory.write_ewram_8(addr - EWRAM_BASE, val),
             0x03 => self.memory.write_iwram_8(addr - IWRAM_BASE, val),
-            0x04 => self.io[(addr & (IO_SIZE as u32 - 1)) as usize] = val,
+            0x04 => self.io.write_8(addr, val),
             0x05 => self.palette[(addr & (PALETTE_SIZE as u32 - 1)) as usize] = val,
             0x06 => {
                 let offset = vram_offset(addr);
@@ -147,7 +155,7 @@ impl BusInterface for Bus {
             0x00 => {}
             0x02 => self.memory.write_ewram_16(addr - EWRAM_BASE, val),
             0x03 => self.memory.write_iwram_16(addr - IWRAM_BASE, val),
-            0x04 => write_u16(&mut self.io[..], (addr & (IO_SIZE as u32 - 1)) as usize, val),
+            0x04 => self.io.write_16(addr, val),
             0x05 => write_u16(
                 &mut self.palette[..],
                 (addr & (PALETTE_SIZE as u32 - 1)) as usize,
@@ -166,7 +174,7 @@ impl BusInterface for Bus {
             0x00 => {}
             0x02 => self.memory.write_ewram_32(addr - EWRAM_BASE, val),
             0x03 => self.memory.write_iwram_32(addr - IWRAM_BASE, val),
-            0x04 => write_u32(&mut self.io[..], (addr & (IO_SIZE as u32 - 1)) as usize, val),
+            0x04 => self.io.write_32(addr, val),
             0x05 => write_u32(
                 &mut self.palette[..],
                 (addr & (PALETTE_SIZE as u32 - 1)) as usize,
