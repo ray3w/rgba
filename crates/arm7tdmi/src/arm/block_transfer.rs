@@ -19,11 +19,14 @@ pub(super) fn execute<B: BusInterface>(
     let load = ((opcode >> 20) & 1) != 0;
     let rn = ((opcode >> 16) & 0xf) as u8;
     let reglist = opcode & 0xffff;
-
-    let count = reglist.count_ones();
-    if count == 0 {
-        return ExecutionResult::sequential(1);
-    }
+    let effective_reglist = if reglist == 0 { 1 << PC } else { reglist };
+    let count = if reglist == 0 {
+        16
+    } else {
+        effective_reglist.count_ones()
+    };
+    let base_in_list = (effective_reglist & (1 << rn)) != 0;
+    let first_reg = effective_reglist.trailing_zeros() as u8;
 
     let base = read_exec_reg(cpu, rn, fetch_pc);
     let start_addr = match (add_offset, pre_index) {
@@ -38,7 +41,7 @@ pub(super) fn execute<B: BusInterface>(
         base.wrapping_sub(count * 4)
     };
 
-    let access_user_bank = user_mode && (!load || (reglist & (1 << PC)) == 0);
+    let access_user_bank = user_mode && (!load || (effective_reglist & (1 << PC)) == 0);
     let user_bank = user_bank_mode(cpu.mode());
 
     let mut address = start_addr;
@@ -46,7 +49,7 @@ pub(super) fn execute<B: BusInterface>(
 
     if load {
         for reg in 0..16u8 {
-            if (reglist & (1 << reg)) == 0 {
+            if (effective_reglist & (1 << reg)) == 0 {
                 continue;
             }
 
@@ -60,19 +63,25 @@ pub(super) fn execute<B: BusInterface>(
             }
         }
 
-        if user_mode && (reglist & (1 << PC)) != 0 {
+        if user_mode && (effective_reglist & (1 << PC)) != 0 {
             if let Some(saved) = cpu.spsr(cpu.mode()) {
                 cpu.set_cpsr(saved);
             }
         }
     } else {
         for reg in 0..16u8 {
-            if (reglist & (1 << reg)) == 0 {
+            if (effective_reglist & (1 << reg)) == 0 {
                 continue;
             }
 
             let value = if access_user_bank && reg != PC {
                 cpu.read_reg_for_mode(user_bank, reg)
+            } else if write_back && reg == rn && reglist != 0 {
+                if rn == first_reg {
+                    base
+                } else {
+                    final_base
+                }
             } else if reg == PC {
                 fetch_pc.wrapping_add(12)
             } else {
@@ -84,7 +93,7 @@ pub(super) fn execute<B: BusInterface>(
         }
     }
 
-    if write_back {
+    if write_back && !(load && base_in_list && reglist != 0) {
         cpu.write_reg(rn, final_base);
     }
 
@@ -154,5 +163,62 @@ mod tests {
         assert_eq!(cpu.read_reg(1), 0x1234_5678);
         assert_eq!(cpu.pc(), 0x80);
         assert_eq!(cpu.cpsr(), saved);
+    }
+
+    #[test]
+    fn ldm_empty_rlist_loads_pc_and_increments_base_by_0x40() {
+        let mut cpu = cpu_with_pc(0);
+        let mut bus = FakeBus::new(512);
+        cpu.write_reg(0, 0x40);
+        bus.write32(0x40, 0x80);
+
+        exec(&mut cpu, &mut bus, 0xe8b0_0000);
+
+        assert_eq!(cpu.pc(), 0x80);
+        assert_eq!(cpu.read_reg(0), 0x80);
+    }
+
+    #[test]
+    fn stmia_empty_rlist_stores_pc_and_increments_base_by_0x40() {
+        let mut cpu = cpu_with_pc(0);
+        let mut bus = FakeBus::new(512);
+        cpu.write_reg(0, 0x40);
+
+        exec(&mut cpu, &mut bus, 0xe8a0_0000);
+
+        assert_eq!(bus.read32(0x40), 0x0c);
+        assert_eq!(cpu.read_reg(0), 0x80);
+    }
+
+    #[test]
+    fn ldm_with_writeback_and_base_in_list_keeps_loaded_base_on_arm7() {
+        let mut cpu = cpu_with_pc(0);
+        let mut bus = FakeBus::new(512);
+        cpu.write_reg(1, 0x48);
+        bus.write32(0x48, 0x0a);
+        bus.write32(0x4c, 0x0b);
+
+        exec(&mut cpu, &mut bus, 0xe8b1_0006);
+
+        assert_eq!(cpu.read_reg(1), 0x0a);
+        assert_eq!(cpu.read_reg(2), 0x0b);
+    }
+
+    #[test]
+    fn stm_with_writeback_stores_new_base_when_base_is_not_first() {
+        let mut cpu = cpu_with_pc(0);
+        let mut bus = FakeBus::new(512);
+        cpu.write_reg(1, 0x80);
+        cpu.write_reg(0, 0x11);
+        cpu.write_reg(2, 0x22);
+        cpu.write_reg(3, 0x33);
+
+        exec(&mut cpu, &mut bus, 0xe921_000f);
+
+        assert_eq!(bus.read32(0x70), 0x11);
+        assert_eq!(bus.read32(0x74), 0x70);
+        assert_eq!(bus.read32(0x78), 0x22);
+        assert_eq!(bus.read32(0x7c), 0x33);
+        assert_eq!(cpu.read_reg(1), 0x70);
     }
 }

@@ -46,7 +46,7 @@ pub(crate) fn execute<B: BusInterface>(
     } else if transfer::is_transfer(opcode) {
         transfer::execute(cpu, bus, opcode, fetch_pc)
     } else if stack::is_stack(opcode) {
-        stack::execute(cpu, bus, opcode)
+        stack::execute(cpu, bus, opcode, fetch_pc)
     } else if branch::is_branch(opcode) {
         branch::execute(cpu, opcode, fetch_pc)
     } else {
@@ -97,11 +97,11 @@ pub(super) fn store_word<B: BusInterface>(bus: &mut B, address: u32, value: u32)
 }
 
 pub(super) fn load_halfword<B: BusInterface>(bus: &mut B, address: u32) -> u32 {
-    let value = bus.read_16(address & !1);
+    let value = u32::from(bus.read_16(address & !1));
     if (address & 1) == 0 {
-        u32::from(value)
+        value
     } else {
-        u32::from(value.rotate_right(8))
+        value.rotate_right(8)
     }
 }
 

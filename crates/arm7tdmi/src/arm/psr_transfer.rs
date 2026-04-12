@@ -32,7 +32,7 @@ pub(super) fn execute_msr(cpu: &mut Arm7tdmi, opcode: u32) -> ExecutionResult {
     let mut field_mask = ((opcode >> 16) & 0xf) as u8;
 
     if !cpu.mode().is_privileged() {
-        field_mask &= 0b0001;
+        field_mask &= 0b1000;
     }
 
     let source = if immediate {
@@ -63,16 +63,16 @@ fn decode_immediate(opcode: u32) -> u32 {
 fn apply_field_mask(current: Psr, source: u32, field_mask: u8, allow_control: bool) -> Psr {
     let mut bits = current.bits();
 
-    if (field_mask & 0b0001) != 0 {
+    if (field_mask & 0b1000) != 0 {
         bits = (bits & 0x00ff_ffff) | (source & 0xff00_0000);
     }
-    if (field_mask & 0b0010) != 0 {
+    if (field_mask & 0b0100) != 0 {
         bits = (bits & 0xff00_ffff) | (source & 0x00ff_0000);
     }
-    if (field_mask & 0b0100) != 0 {
+    if (field_mask & 0b0010) != 0 {
         bits = (bits & 0xffff_00ff) | (source & 0x0000_ff00);
     }
-    if allow_control && (field_mask & 0b1000) != 0 {
+    if allow_control && (field_mask & 0b0001) != 0 {
         bits = (bits & 0xffff_ff00) | (source & 0x0000_00ff);
     }
 
@@ -109,7 +109,7 @@ mod tests {
     fn msr_register_updates_selected_cpsr_fields() {
         let mut cpu = cpu_with_pc(0);
         cpu.write_reg(0, 0xf000_0000);
-        exec(&mut cpu, 0xe121_f000);
+        exec(&mut cpu, 0xe128_f000);
 
         assert!(cpu.cpsr().negative());
         assert!(cpu.cpsr().zero());
@@ -124,11 +124,32 @@ mod tests {
         cpu.set_mode(Mode::Supervisor);
         cpu.set_spsr(Mode::Supervisor, Psr::new(Mode::Irq));
 
-        exec(&mut cpu, 0xe361_f4f0);
+        exec(&mut cpu, 0xe368_f4f0);
         let spsr = cpu.spsr(Mode::Supervisor).unwrap();
         assert!(spsr.negative());
         assert!(spsr.zero());
         assert!(spsr.carry());
         assert!(spsr.overflow());
+    }
+
+    #[test]
+    fn msr_cpsr_f_updates_flag_byte() {
+        let mut cpu = cpu_with_pc(0);
+        cpu.write_reg(0, 0xf000_0000);
+
+        exec(&mut cpu, 0xe128_f000);
+
+        assert_eq!(cpu.cpsr().bits() & 0xff00_0000, 0xf000_0000);
+    }
+
+    #[test]
+    fn user_mode_msr_cpsr_c_does_not_change_control_bits() {
+        let mut cpu = cpu_with_pc(0);
+        cpu.write_reg(0, 0x0000_0013);
+
+        exec(&mut cpu, 0xe121_f000);
+
+        assert_eq!(cpu.mode(), Mode::User);
+        assert!(!cpu.is_thumb());
     }
 }

@@ -3,6 +3,8 @@
 mod block_transfer;
 mod branch;
 mod data_proc;
+mod data_swap;
+mod halfword_transfer;
 mod multiply;
 mod psr_transfer;
 mod transfer;
@@ -48,6 +50,10 @@ pub(crate) fn execute<B: BusInterface>(
         multiply::execute_multiply_long(cpu, opcode, fetch_pc)
     } else if multiply::is_multiply(opcode) {
         multiply::execute_multiply(cpu, opcode, fetch_pc)
+    } else if data_swap::is_data_swap(opcode) {
+        data_swap::execute(cpu, bus, opcode, fetch_pc)
+    } else if halfword_transfer::is_halfword_transfer(opcode) {
+        halfword_transfer::execute(cpu, bus, opcode, fetch_pc)
     } else if psr_transfer::is_mrs(opcode) {
         psr_transfer::execute_mrs(cpu, opcode)
     } else if psr_transfer::is_msr(opcode) {

@@ -58,7 +58,7 @@ pub(super) fn execute<B: BusInterface>(
         }
     }
 
-    if !pre_index || write_back {
+    if (!pre_index || write_back) && !(load && rn == rd) {
         cpu.write_reg(rn, indexed);
     }
 
@@ -82,14 +82,61 @@ fn decode_register_offset(cpu: &Arm7tdmi, opcode: u32, fetch_pc: u32) -> u32 {
         shift_kind,
         read_exec_reg(cpu, rm, fetch_pc),
         shift_amount,
-        false,
+        cpu.cpsr().carry(),
     )
     .value
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::arm::test_utils::{cpu_with_pc, FakeBus};
+    use crate::BusInterface;
+
+    #[derive(Default)]
+    struct SparseBus {
+        mem: HashMap<u32, u8>,
+    }
+
+    impl SparseBus {
+        fn write32(&mut self, addr: u32, value: u32) {
+            self.write_32(addr, value);
+        }
+    }
+
+    impl BusInterface for SparseBus {
+        fn read_8(&mut self, addr: u32) -> u8 {
+            *self.mem.get(&addr).unwrap_or(&0)
+        }
+
+        fn read_16(&mut self, addr: u32) -> u16 {
+            u16::from(self.read_8(addr)) | (u16::from(self.read_8(addr.wrapping_add(1))) << 8)
+        }
+
+        fn read_32(&mut self, addr: u32) -> u32 {
+            u32::from(self.read_8(addr))
+                | (u32::from(self.read_8(addr.wrapping_add(1))) << 8)
+                | (u32::from(self.read_8(addr.wrapping_add(2))) << 16)
+                | (u32::from(self.read_8(addr.wrapping_add(3))) << 24)
+        }
+
+        fn write_8(&mut self, addr: u32, val: u8) {
+            self.mem.insert(addr, val);
+        }
+
+        fn write_16(&mut self, addr: u32, val: u16) {
+            self.write_8(addr, val as u8);
+            self.write_8(addr.wrapping_add(1), (val >> 8) as u8);
+        }
+
+        fn write_32(&mut self, addr: u32, val: u32) {
+            self.write_8(addr, val as u8);
+            self.write_8(addr.wrapping_add(1), (val >> 8) as u8);
+            self.write_8(addr.wrapping_add(2), (val >> 16) as u8);
+            self.write_8(addr.wrapping_add(3), (val >> 24) as u8);
+        }
+    }
 
     fn exec(cpu: &mut crate::Arm7tdmi, bus: &mut FakeBus, opcode: u32) {
         bus.load32(cpu.pc(), opcode);
@@ -146,5 +193,48 @@ mod tests {
         exec(&mut cpu, &mut bus, 0xe590_1001);
 
         assert_eq!(cpu.read_reg(1), 0x4411_2233);
+    }
+
+    #[test]
+    fn preindexed_load_with_writeback_same_register_keeps_loaded_value() {
+        let mut cpu = cpu_with_pc(0);
+        let mut bus = FakeBus::new(256);
+        cpu.write_reg(0, 0x40);
+        bus.write32(0x44, 32);
+
+        exec(&mut cpu, &mut bus, 0xe5b0_0004);
+
+        assert_eq!(cpu.read_reg(0), 32);
+    }
+
+    #[test]
+    fn postindexed_load_with_writeback_same_register_keeps_loaded_value() {
+        let mut cpu = cpu_with_pc(0);
+        let mut bus = FakeBus::new(256);
+        cpu.write_reg(0, 0x40);
+        bus.write32(0x40, 32);
+
+        exec(&mut cpu, &mut bus, 0xe490_0004);
+
+        assert_eq!(cpu.read_reg(0), 32);
+    }
+
+    #[test]
+    fn register_offset_rrx_uses_carry_in() {
+        let mut cpu = cpu_with_pc(0);
+        let mut bus = SparseBus::default();
+        cpu.write_reg(0, 0);
+        cpu.write_reg(1, 0);
+        bus.write32(0x8000_0000, 0xdead_beef);
+
+        let mut cpsr = cpu.cpsr();
+        cpsr.set_carry(true);
+        cpu.set_cpsr(cpsr);
+
+        bus.write_32(cpu.pc(), 0xe7b1_2060); // LDR r2, [r1, r0, RRX]!
+        cpu.step(&mut bus);
+
+        assert_eq!(cpu.read_reg(1), 0x8000_0000);
+        assert_eq!(cpu.read_reg(2), 0xdead_beef);
     }
 }

@@ -297,4 +297,17 @@ mod tests {
         assert_eq!(bus.read32(0x80), 0xaabb_ccdd);
         assert_eq!(cpu.read_reg(1), 0xaabb_ccdd);
     }
+
+    #[test]
+    fn misaligned_halfword_load_rotates_across_the_full_word() {
+        let mut cpu = cpu_with_pc(0);
+        let mut bus = FakeBus::new(256);
+        cpu.write_reg(1, 0x40);
+        cpu.write_reg(2, 1);
+        bus.write_16(0x40, 0x00ff);
+
+        exec(&mut cpu, &mut bus, 0x5a88); // LDRH r0, [r1, r2]
+
+        assert_eq!(cpu.read_reg(0), 0xff00_0000);
+    }
 }
