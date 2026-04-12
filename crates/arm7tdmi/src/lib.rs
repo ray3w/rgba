@@ -10,6 +10,7 @@ pub mod arm;
 pub mod exception;
 pub mod psr;
 pub mod reg;
+pub mod thumb;
 
 pub use alu::{
     add_with_carry, shift_immediate, shift_register, ArithmeticResult, ShiftKind, ShiftResult,
@@ -60,20 +61,29 @@ impl Arm7tdmi {
         }
     }
 
-    /// Phase 1b executes ARM-state instructions. Thumb-state execution lands in
-    /// Phase 1c.
+    /// Executes one instruction in either ARM or Thumb state.
     pub fn step<B: BusInterface>(&mut self, bus: &mut B) -> u32 {
-        assert!(!self.is_thumb(), "thumb-state execution lands in phase 1c");
-
         let fetch_pc = self.pc();
-        let opcode = bus.read_32(fetch_pc);
-        let outcome = arm::execute(self, bus, opcode, fetch_pc);
 
-        if !outcome.wrote_pc {
-            self.set_pc(fetch_pc.wrapping_add(4));
+        if self.is_thumb() {
+            let opcode = bus.read_16(fetch_pc);
+            let outcome = thumb::execute(self, bus, opcode, fetch_pc);
+
+            if !outcome.wrote_pc {
+                self.set_pc(fetch_pc.wrapping_add(2));
+            }
+
+            outcome.cycles
+        } else {
+            let opcode = bus.read_32(fetch_pc);
+            let outcome = arm::execute(self, bus, opcode, fetch_pc);
+
+            if !outcome.wrote_pc {
+                self.set_pc(fetch_pc.wrapping_add(4));
+            }
+
+            outcome.cycles
         }
-
-        outcome.cycles
     }
 
     pub fn mode(&self) -> Mode {

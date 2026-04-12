@@ -149,6 +149,10 @@ pub(crate) mod test_utils {
             self.write_32(addr, value);
         }
 
+        pub(crate) fn load16(&mut self, addr: u32, value: u16) {
+            self.write_16(addr, value);
+        }
+
         pub(crate) fn read32(&self, addr: u32) -> u32 {
             let b0 = self.mem[addr as usize] as u32;
             let b1 = self.mem[addr as usize + 1] as u32;
