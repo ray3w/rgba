@@ -1,4 +1,5 @@
 mod bg;
+mod compose;
 mod mode3;
 mod mode4;
 
@@ -93,9 +94,9 @@ impl Ppu {
     fn render_visible_scanline(&mut self, io: &IoRegs, vram: &[u8], palette: &[u8]) {
         let y = self.vcount as usize;
         match io.display_mode() {
-            0 if io.bg_enabled(0) => {
-                bg::render_mode0_bg0_scanline(&mut self.framebuffer, io, vram, palette, y);
-            }
+            0 => bg::render_mode0_scanline(&mut self.framebuffer, io, vram, palette, y),
+            1 => bg::render_mode1_scanline(&mut self.framebuffer, io, vram, palette, y),
+            2 => bg::render_mode2_scanline(&mut self.framebuffer, io, vram, palette, y),
             3 if io.bg2_enabled() => {
                 mode3::render_scanline(&mut self.framebuffer, vram, y);
             }
@@ -161,9 +162,14 @@ mod tests {
     use crate::io::IoRegs;
 
     const BG0_MODE0: u16 = 0x0100;
+    const BG0_BG1_MODE0: u16 = 0x0300;
+    const BG2_MODE1: u16 = 0x0401;
     const MODE3_BG2: u16 = 0x0403;
     const MODE4_BG2: u16 = 0x0404;
     const BG0CNT_BLOCK1: u16 = 0x0104;
+    const BG1CNT_BLOCK1_PRIORITY0: u16 = 0x0104;
+    const BG0CNT_PRIORITY1: u16 = 0x0001;
+    const BG2CNT_BLOCK1: u16 = 0x0104;
 
     fn write_u16(slice: &mut [u8], offset: usize, value: u16) {
         slice[offset] = value as u8;
@@ -236,6 +242,62 @@ mod tests {
         assert_eq!(ppu.framebuffer()[1], 0x03e0);
         assert_eq!(ppu.framebuffer()[2], 0x001f);
         assert_eq!(ppu.framebuffer()[3], 0x03e0);
+    }
+
+    #[test]
+    fn mode0_composes_multiple_backgrounds_by_priority() {
+        let mut ppu = Ppu::new();
+        let mut io = IoRegs::new();
+        let mut vram = vec![0; 0x18000];
+        let mut palette = vec![0; 0x400];
+        io.write_16(0x0400_0000, BG0_BG1_MODE0);
+        io.write_16(0x0400_0008, BG0CNT_PRIORITY1);
+        io.write_16(0x0400_000a, BG1CNT_BLOCK1_PRIORITY0);
+        write_u16(&mut palette, 0, 0x0000);
+        write_u16(&mut palette, 2, 0x001f);
+        write_u16(&mut palette, 4, 0x03e0);
+
+        vram[0x0000] = 0x11;
+        vram[0x0001] = 0x11;
+        vram[0x0002] = 0x11;
+        vram[0x0003] = 0x11;
+        write_u16(&mut vram, 0x0000, 0x0000);
+
+        vram[0x4000] = 0x22;
+        vram[0x4001] = 0x22;
+        vram[0x4002] = 0x22;
+        vram[0x4003] = 0x22;
+        write_u16(&mut vram, 0x0800, 0x0000);
+
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette);
+
+        assert_eq!(ppu.framebuffer()[0], 0x03e0);
+        assert_eq!(ppu.framebuffer()[1], 0x03e0);
+    }
+
+    #[test]
+    fn mode1_renders_affine_bg2_with_identity_transform() {
+        let mut ppu = Ppu::new();
+        let mut io = IoRegs::new();
+        let mut vram = vec![0; 0x18000];
+        let mut palette = vec![0; 0x400];
+        io.write_16(0x0400_0000, BG2_MODE1);
+        io.write_16(0x0400_000c, BG2CNT_BLOCK1);
+        io.write_16(0x0400_0020, 0x0100);
+        io.write_16(0x0400_0022, 0x0000);
+        io.write_16(0x0400_0024, 0x0000);
+        io.write_16(0x0400_0026, 0x0100);
+
+        write_u16(&mut palette, 2, 0x001f);
+        write_u16(&mut palette, 4, 0x03e0);
+        vram[0x4000] = 1;
+        vram[0x4001] = 2;
+        vram[0x0800] = 0;
+
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette);
+
+        assert_eq!(ppu.framebuffer()[0], 0x001f);
+        assert_eq!(ppu.framebuffer()[1], 0x03e0);
     }
 
     #[test]

@@ -4,6 +4,8 @@ const VCOUNT_ADDR: u32 = 0x0400_0006;
 
 const BG0CNT_ADDR: u32 = 0x0400_0008;
 const BG0HOFS_ADDR: u32 = 0x0400_0010;
+const BG2PA_ADDR: u32 = 0x0400_0020;
+const BG2X_ADDR: u32 = 0x0400_0028;
 
 const DMA0SAD_ADDR: u32 = 0x0400_00b0;
 const DMA0CNT_H_ADDR: u32 = 0x0400_00ba;
@@ -52,6 +54,12 @@ pub struct IoRegs {
     bg_control: [u16; 4],
     bg_hofs: [u16; 4],
     bg_vofs: [u16; 4],
+    bg_affine_pa: [i16; 2],
+    bg_affine_pb: [i16; 2],
+    bg_affine_pc: [i16; 2],
+    bg_affine_pd: [i16; 2],
+    bg_ref_x: [i32; 2],
+    bg_ref_y: [i32; 2],
     keyinput: u16,
     keycnt: u16,
     timer_reload: [u16; 4],
@@ -82,6 +90,12 @@ impl IoRegs {
             bg_control: [0; 4],
             bg_hofs: [0; 4],
             bg_vofs: [0; 4],
+            bg_affine_pa: [0; 2],
+            bg_affine_pb: [0; 2],
+            bg_affine_pc: [0; 2],
+            bg_affine_pd: [0; 2],
+            bg_ref_x: [0; 2],
+            bg_ref_y: [0; 2],
             keyinput: 0x03ff,
             keycnt: 0,
             timer_reload: [0; 4],
@@ -178,8 +192,27 @@ impl IoRegs {
         ((self.bg_control[index] >> 8) & 0x001f) as usize
     }
 
+    pub fn bg_wrap(&self, index: usize) -> bool {
+        (self.bg_control[index] & (1 << 13)) != 0
+    }
+
     pub fn bg_size(&self, index: usize) -> u8 {
         ((self.bg_control[index] >> 14) & 0x0003) as u8
+    }
+
+    pub fn bg_affine_matrix(&self, index: usize) -> Option<(i16, i16, i16, i16)> {
+        let affine = affine_index(index)?;
+        Some((
+            self.bg_affine_pa[affine],
+            self.bg_affine_pb[affine],
+            self.bg_affine_pc[affine],
+            self.bg_affine_pd[affine],
+        ))
+    }
+
+    pub fn bg_affine_ref_point(&self, index: usize) -> Option<(i32, i32)> {
+        let affine = affine_index(index)?;
+        Some((self.bg_ref_x[affine], self.bg_ref_y[affine]))
     }
 
     pub fn ime_enabled(&self) -> bool {
@@ -310,6 +343,24 @@ impl IoRegs {
                     } else {
                         self.bg_hofs[index]
                     }
+                } else if let Some((index, param)) = affine_param_reg(aligned) {
+                    match param {
+                        AffineParam::Pa => self.bg_affine_pa[index] as u16,
+                        AffineParam::Pb => self.bg_affine_pb[index] as u16,
+                        AffineParam::Pc => self.bg_affine_pc[index] as u16,
+                        AffineParam::Pd => self.bg_affine_pd[index] as u16,
+                    }
+                } else if let Some((index, axis, high)) = affine_ref_reg(aligned) {
+                    let raw = if axis == AffineAxis::X {
+                        self.bg_ref_x[index] as u32
+                    } else {
+                        self.bg_ref_y[index] as u32
+                    };
+                    if high {
+                        (raw >> 16) as u16
+                    } else {
+                        raw as u16
+                    }
                 } else if let Some((index, high)) = timer_reg(aligned) {
                     if high {
                         self.timer_control[index]
@@ -374,6 +425,31 @@ impl IoRegs {
                     } else {
                         self.bg_hofs[index] = val & 0x01ff;
                     }
+                } else if let Some((index, param)) = affine_param_reg(aligned) {
+                    let value = val as i16;
+                    match param {
+                        AffineParam::Pa => self.bg_affine_pa[index] = value,
+                        AffineParam::Pb => self.bg_affine_pb[index] = value,
+                        AffineParam::Pc => self.bg_affine_pc[index] = value,
+                        AffineParam::Pd => self.bg_affine_pd[index] = value,
+                    }
+                } else if let Some((index, axis, high)) = affine_ref_reg(aligned) {
+                    let current = if axis == AffineAxis::X {
+                        self.bg_ref_x[index] as u32
+                    } else {
+                        self.bg_ref_y[index] as u32
+                    };
+                    let combined = if high {
+                        (current & 0x0000_ffff) | (u32::from(val) << 16)
+                    } else {
+                        (current & 0xffff_0000) | u32::from(val)
+                    };
+                    let normalized = normalize_bg_ref(combined);
+                    if axis == AffineAxis::X {
+                        self.bg_ref_x[index] = normalized;
+                    } else {
+                        self.bg_ref_y[index] = normalized;
+                    }
                 } else if let Some((index, high)) = timer_reg(aligned) {
                     if high {
                         self.timer_control[index] = val & 0x00c7;
@@ -422,6 +498,24 @@ enum DmaRegPart {
     Control,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AffineParam {
+    Pa,
+    Pb,
+    Pc,
+    Pd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AffineAxis {
+    X,
+    Y,
+}
+
+fn affine_index(bg_index: usize) -> Option<usize> {
+    bg_index.checked_sub(2).filter(|&index| index < 2)
+}
+
 fn bg_control_reg(addr: u32) -> Option<usize> {
     if !(BG0CNT_ADDR..=BG0CNT_ADDR + 6).contains(&addr) {
         return None;
@@ -444,6 +538,43 @@ fn bg_scroll_reg(addr: u32) -> Option<(usize, bool)> {
         2 => Some(((offset / 4) as usize, true)),
         _ => None,
     }
+}
+
+fn affine_param_reg(addr: u32) -> Option<(usize, AffineParam)> {
+    if (BG2PA_ADDR..=BG2PA_ADDR + 0x16).contains(&addr) {
+        let offset = addr - BG2PA_ADDR;
+        let index = (offset / 0x10) as usize;
+        let param = match offset & 0x000e {
+            0x0000 => AffineParam::Pa,
+            0x0002 => AffineParam::Pb,
+            0x0004 => AffineParam::Pc,
+            0x0006 => AffineParam::Pd,
+            _ => return None,
+        };
+        Some((index, param))
+    } else {
+        None
+    }
+}
+
+fn affine_ref_reg(addr: u32) -> Option<(usize, AffineAxis, bool)> {
+    if (BG2X_ADDR..=BG2X_ADDR + 0x16).contains(&addr) {
+        let offset = addr - BG2X_ADDR;
+        let index = (offset / 0x10) as usize;
+        let high = (offset & 0x0002) != 0;
+        let axis = match offset & 0x000c {
+            0x0000 => AffineAxis::X,
+            0x0004 => AffineAxis::Y,
+            _ => return None,
+        };
+        Some((index, axis, high))
+    } else {
+        None
+    }
+}
+
+fn normalize_bg_ref(raw: u32) -> i32 {
+    ((raw << 4) as i32) >> 4
 }
 
 fn timer_reg(addr: u32) -> Option<(usize, bool)> {
@@ -500,6 +631,10 @@ mod tests {
     const BG0CNT_ADDR: u32 = 0x0400_0008;
     const BG0HOFS_ADDR: u32 = 0x0400_0010;
     const BG0VOFS_ADDR: u32 = 0x0400_0012;
+    const BG2PA_ADDR: u32 = 0x0400_0020;
+    const BG2X_ADDR: u32 = 0x0400_0028;
+    const BG2Y_ADDR: u32 = 0x0400_002c;
+    const BG3CNT_ADDR: u32 = 0x0400_000e;
     const DISPCNT_ADDR: u32 = 0x0400_0000;
     const DMA0DAD_ADDR: u32 = 0x0400_00b4;
     const DMA0CNT_L_ADDR: u32 = 0x0400_00b8;
@@ -534,6 +669,7 @@ mod tests {
         io.write_16(BG0CNT_ADDR, 0x4104);
         io.write_16(BG0HOFS_ADDR, 0x03ab);
         io.write_16(BG0VOFS_ADDR, 0x02cd);
+        io.write_16(BG3CNT_ADDR, 0x6110);
 
         assert_eq!(io.read_16(BG0CNT_ADDR), 0x4104);
         assert_eq!(io.bg_char_base_block(0), 1);
@@ -541,6 +677,25 @@ mod tests {
         assert_eq!(io.bg_size(0), 1);
         assert_eq!(io.read_16(BG0HOFS_ADDR), 0x01ab);
         assert_eq!(io.read_16(BG0VOFS_ADDR), 0x00cd);
+        assert_eq!(io.bg_screen_base_block(3), 1);
+        assert_eq!(io.bg_size(3), 1);
+        assert!(io.bg_wrap(3));
+    }
+
+    #[test]
+    fn affine_background_registers_round_trip() {
+        let mut io = IoRegs::new();
+        io.write_16(BG2PA_ADDR, 0x0100);
+        io.write_16(BG2PA_ADDR + 2, 0xff80);
+        io.write_16(BG2PA_ADDR + 4, 0x0020);
+        io.write_16(BG2PA_ADDR + 6, 0x00c0);
+        io.write_32(BG2X_ADDR, 0x0001_0080);
+        io.write_32(BG2Y_ADDR, 0xffff_ff00);
+
+        assert_eq!(io.read_16(BG2PA_ADDR), 0x0100);
+        assert_eq!(io.read_16(BG2PA_ADDR + 2), 0xff80);
+        assert_eq!(io.bg_affine_matrix(2), Some((0x0100, -128, 0x0020, 0x00c0)));
+        assert_eq!(io.bg_affine_ref_point(2), Some((0x0001_0080, -0x100)));
     }
 
     #[test]
