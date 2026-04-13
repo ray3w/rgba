@@ -61,14 +61,27 @@ impl Bus {
         &mut self.io
     }
 
+    pub fn palette(&self) -> &[u8] {
+        &self.palette[..]
+    }
+
     pub fn vram(&self) -> &[u8] {
         &self.vram[..]
     }
 
-    pub fn with_video<R>(&mut self, f: impl FnOnce(&mut IoRegs, &[u8]) -> R) -> R {
+    pub fn oam(&self) -> &[u8] {
+        &self.oam[..]
+    }
+
+    pub fn with_ppu_state<R>(
+        &mut self,
+        f: impl FnOnce(&mut IoRegs, &[u8], &[u8], &[u8]) -> R,
+    ) -> R {
         let io = &mut self.io;
         let vram = &self.vram[..];
-        f(io, vram)
+        let palette = &self.palette[..];
+        let oam = &self.oam[..];
+        f(io, vram, palette, oam)
     }
 
     pub fn cartridge(&self) -> &Cartridge {

@@ -1,4 +1,6 @@
+mod bg;
 mod mode3;
+mod mode4;
 
 use crate::io::IoRegs;
 
@@ -54,7 +56,7 @@ impl Ppu {
         ready
     }
 
-    pub fn step(&mut self, cycles: u32, io: &mut IoRegs, vram: &[u8]) {
+    pub fn step(&mut self, cycles: u32, io: &mut IoRegs, vram: &[u8], palette: &[u8]) {
         let mut remaining = cycles;
 
         while remaining > 0 {
@@ -70,7 +72,7 @@ impl Ppu {
             if self.line_cycles == HDRAW_CYCLES {
                 io.set_hblank(true);
                 if self.vcount < SCREEN_HEIGHT as u16 {
-                    self.render_visible_scanline(io, vram);
+                    self.render_visible_scanline(io, vram, palette);
                 }
             }
 
@@ -88,13 +90,25 @@ impl Ppu {
         }
     }
 
-    fn render_visible_scanline(&mut self, io: &IoRegs, vram: &[u8]) {
+    fn render_visible_scanline(&mut self, io: &IoRegs, vram: &[u8], palette: &[u8]) {
         let y = self.vcount as usize;
-        if io.display_mode() == 3 && io.bg2_enabled() {
-            mode3::render_scanline(&mut self.framebuffer, vram, y);
-        } else {
-            let start = y * SCREEN_WIDTH;
-            self.framebuffer[start..start + SCREEN_WIDTH].fill(0);
+        match io.display_mode() {
+            0 if io.bg_enabled(0) => {
+                bg::render_mode0_bg0_scanline(&mut self.framebuffer, io, vram, palette, y);
+            }
+            3 if io.bg2_enabled() => {
+                mode3::render_scanline(&mut self.framebuffer, vram, y);
+            }
+            4 if io.bg2_enabled() => {
+                mode4::render_scanline(
+                    &mut self.framebuffer,
+                    vram,
+                    palette,
+                    y,
+                    io.display_frame_select(),
+                );
+            }
+            _ => fill_scanline(&mut self.framebuffer, y, backdrop_color(palette)),
         }
     }
 
@@ -115,6 +129,22 @@ impl Ppu {
     }
 }
 
+pub(crate) fn fill_scanline(framebuffer: &mut [u16; FRAME_PIXELS], y: usize, color: u16) {
+    let start = y * SCREEN_WIDTH;
+    framebuffer[start..start + SCREEN_WIDTH].fill(color);
+}
+
+pub(crate) fn read_palette_color(palette: &[u8], index: usize) -> u16 {
+    let offset = (index * 2) % palette.len().max(1);
+    let lo = palette.get(offset).copied().unwrap_or(0) as u16;
+    let hi = palette.get(offset + 1).copied().unwrap_or(0) as u16;
+    lo | (hi << 8)
+}
+
+pub(crate) fn backdrop_color(palette: &[u8]) -> u16 {
+    read_palette_color(palette, 0)
+}
+
 pub fn rgb555_to_xrgb8888(pixel: u16) -> u32 {
     let r = (u32::from(pixel & 0x001f) * 255) / 31;
     let g = (u32::from((pixel >> 5) & 0x001f) * 255) / 31;
@@ -130,12 +160,19 @@ mod tests {
     };
     use crate::io::IoRegs;
 
+    const BG0_MODE0: u16 = 0x0100;
     const MODE3_BG2: u16 = 0x0403;
+    const MODE4_BG2: u16 = 0x0404;
+    const BG0CNT_BLOCK1: u16 = 0x0104;
+
+    fn write_u16(slice: &mut [u8], offset: usize, value: u16) {
+        slice[offset] = value as u8;
+        slice[offset + 1] = (value >> 8) as u8;
+    }
 
     fn write_pixel(vram: &mut [u8], x: usize, y: usize, color: u16) {
         let offset = ((y * 240) + x) * 2;
-        vram[offset] = color as u8;
-        vram[offset + 1] = (color >> 8) as u8;
+        write_u16(vram, offset, color);
     }
 
     #[test]
@@ -143,11 +180,12 @@ mod tests {
         let mut ppu = Ppu::new();
         let mut io = IoRegs::new();
         let mut vram = vec![0; 0x18000];
+        let palette = vec![0; 0x400];
         io.write_16(0x0400_0000, MODE3_BG2);
         write_pixel(&mut vram, 0, 0, 0x001f);
         write_pixel(&mut vram, 1, 0, 0x03e0);
 
-        ppu.step(HDRAW_CYCLES, &mut io, &vram);
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette);
 
         assert_eq!(ppu.framebuffer()[0], 0x001f);
         assert_eq!(ppu.framebuffer()[1], 0x03e0);
@@ -155,12 +193,64 @@ mod tests {
     }
 
     #[test]
+    fn mode4_hblank_renders_palette_bitmap_scanline() {
+        let mut ppu = Ppu::new();
+        let mut io = IoRegs::new();
+        let mut vram = vec![0; 0x18000];
+        let mut palette = vec![0; 0x400];
+        io.write_16(0x0400_0000, MODE4_BG2);
+        write_u16(&mut palette, 2, 0x001f);
+        write_u16(&mut palette, 4, 0x03e0);
+        vram[0] = 1;
+        vram[1] = 2;
+
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette);
+
+        assert_eq!(ppu.framebuffer()[0], 0x001f);
+        assert_eq!(ppu.framebuffer()[1], 0x03e0);
+    }
+
+    #[test]
+    fn mode0_bg0_renders_text_tiles_from_vram() {
+        let mut ppu = Ppu::new();
+        let mut io = IoRegs::new();
+        let mut vram = vec![0; 0x18000];
+        let mut palette = vec![0; 0x400];
+        io.write_16(0x0400_0000, BG0_MODE0);
+        io.write_16(0x0400_0008, BG0CNT_BLOCK1);
+        write_u16(&mut palette, 0, 0x0000);
+        write_u16(&mut palette, 2, 0x001f);
+        write_u16(&mut palette, 4, 0x03e0);
+
+        // Tile 0 in char block 1: alternating red/green on the first row.
+        vram[0x4000] = 0x21;
+        vram[0x4001] = 0x21;
+        vram[0x4002] = 0x21;
+        vram[0x4003] = 0x21;
+        // Screen block 1 entry 0 -> tile 0.
+        write_u16(&mut vram, 0x0800, 0x0000);
+
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette);
+
+        assert_eq!(ppu.framebuffer()[0], 0x001f);
+        assert_eq!(ppu.framebuffer()[1], 0x03e0);
+        assert_eq!(ppu.framebuffer()[2], 0x001f);
+        assert_eq!(ppu.framebuffer()[3], 0x03e0);
+    }
+
+    #[test]
     fn entering_vblank_marks_frame_ready_and_updates_vcount() {
         let mut ppu = Ppu::new();
         let mut io = IoRegs::new();
         let vram = vec![0; 0x18000];
+        let palette = vec![0; 0x400];
 
-        ppu.step(SCANLINE_CYCLES * SCREEN_HEIGHT as u32, &mut io, &vram);
+        ppu.step(
+            SCANLINE_CYCLES * SCREEN_HEIGHT as u32,
+            &mut io,
+            &vram,
+            &palette,
+        );
 
         assert_eq!(ppu.vcount(), SCREEN_HEIGHT as u16);
         assert_eq!(io.vcount(), SCREEN_HEIGHT as u16);

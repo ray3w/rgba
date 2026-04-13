@@ -2,6 +2,9 @@ const DISPCNT_ADDR: u32 = 0x0400_0000;
 const DISPSTAT_ADDR: u32 = 0x0400_0004;
 const VCOUNT_ADDR: u32 = 0x0400_0006;
 
+const BG0CNT_ADDR: u32 = 0x0400_0008;
+const BG0HOFS_ADDR: u32 = 0x0400_0010;
+
 const DMA0SAD_ADDR: u32 = 0x0400_00b0;
 const DMA0CNT_H_ADDR: u32 = 0x0400_00ba;
 
@@ -46,6 +49,9 @@ pub struct IoRegs {
     dispcnt: u16,
     dispstat: u16,
     vcount: u16,
+    bg_control: [u16; 4],
+    bg_hofs: [u16; 4],
+    bg_vofs: [u16; 4],
     keyinput: u16,
     keycnt: u16,
     timer_reload: [u16; 4],
@@ -73,6 +79,9 @@ impl IoRegs {
             dispcnt: 0,
             dispstat: 0,
             vcount: 0,
+            bg_control: [0; 4],
+            bg_hofs: [0; 4],
+            bg_vofs: [0; 4],
             keyinput: 0x03ff,
             keycnt: 0,
             timer_reload: [0; 4],
@@ -129,8 +138,48 @@ impl IoRegs {
         self.dispcnt & 0x0007
     }
 
+    pub fn display_frame_select(&self) -> bool {
+        (self.dispcnt & (1 << 4)) != 0
+    }
+
+    pub fn bg_enabled(&self, index: usize) -> bool {
+        index < 4 && (self.dispcnt & (1 << (8 + index))) != 0
+    }
+
     pub fn bg2_enabled(&self) -> bool {
-        (self.dispcnt & (1 << 10)) != 0
+        self.bg_enabled(2)
+    }
+
+    pub fn bg_control(&self, index: usize) -> u16 {
+        self.bg_control[index]
+    }
+
+    pub fn bg_hofs(&self, index: usize) -> u16 {
+        self.bg_hofs[index]
+    }
+
+    pub fn bg_vofs(&self, index: usize) -> u16 {
+        self.bg_vofs[index]
+    }
+
+    pub fn bg_priority(&self, index: usize) -> u8 {
+        (self.bg_control[index] & 0x0003) as u8
+    }
+
+    pub fn bg_char_base_block(&self, index: usize) -> usize {
+        ((self.bg_control[index] >> 2) & 0x0003) as usize
+    }
+
+    pub fn bg_palette_256(&self, index: usize) -> bool {
+        (self.bg_control[index] & (1 << 7)) != 0
+    }
+
+    pub fn bg_screen_base_block(&self, index: usize) -> usize {
+        ((self.bg_control[index] >> 8) & 0x001f) as usize
+    }
+
+    pub fn bg_size(&self, index: usize) -> u8 {
+        ((self.bg_control[index] >> 14) & 0x0003) as u8
     }
 
     pub fn ime_enabled(&self) -> bool {
@@ -253,7 +302,15 @@ impl IoRegs {
             WAITCNT_ADDR => self.waitcnt,
             IME_ADDR => self.ime,
             _ => {
-                if let Some((index, high)) = timer_reg(aligned) {
+                if let Some(index) = bg_control_reg(aligned) {
+                    self.bg_control[index]
+                } else if let Some((index, vertical)) = bg_scroll_reg(aligned) {
+                    if vertical {
+                        self.bg_vofs[index]
+                    } else {
+                        self.bg_hofs[index]
+                    }
+                } else if let Some((index, high)) = timer_reg(aligned) {
                     if high {
                         self.timer_control[index]
                     } else {
@@ -309,7 +366,15 @@ impl IoRegs {
             WAITCNT_ADDR => self.waitcnt = val,
             IME_ADDR => self.ime = val & 1,
             _ => {
-                if let Some((index, high)) = timer_reg(aligned) {
+                if let Some(index) = bg_control_reg(aligned) {
+                    self.bg_control[index] = val;
+                } else if let Some((index, vertical)) = bg_scroll_reg(aligned) {
+                    if vertical {
+                        self.bg_vofs[index] = val & 0x01ff;
+                    } else {
+                        self.bg_hofs[index] = val & 0x01ff;
+                    }
+                } else if let Some((index, high)) = timer_reg(aligned) {
                     if high {
                         self.timer_control[index] = val & 0x00c7;
                     } else {
@@ -355,6 +420,30 @@ enum DmaRegPart {
     DestHi,
     Count,
     Control,
+}
+
+fn bg_control_reg(addr: u32) -> Option<usize> {
+    if !(BG0CNT_ADDR..=BG0CNT_ADDR + 6).contains(&addr) {
+        return None;
+    }
+    let offset = addr - BG0CNT_ADDR;
+    if (offset & 1) != 0 {
+        return None;
+    }
+    Some((offset / 2) as usize)
+}
+
+fn bg_scroll_reg(addr: u32) -> Option<(usize, bool)> {
+    if !(BG0HOFS_ADDR..=BG0HOFS_ADDR + 0x0e).contains(&addr) {
+        return None;
+    }
+
+    let offset = addr - BG0HOFS_ADDR;
+    match offset & 0x0003 {
+        0 => Some(((offset / 4) as usize, false)),
+        2 => Some(((offset / 4) as usize, true)),
+        _ => None,
+    }
 }
 
 fn timer_reg(addr: u32) -> Option<(usize, bool)> {
@@ -408,6 +497,10 @@ mod tests {
         TM0CNT_L_ADDR, VCOUNT_ADDR, WAITCNT_ADDR,
     };
 
+    const BG0CNT_ADDR: u32 = 0x0400_0008;
+    const BG0HOFS_ADDR: u32 = 0x0400_0010;
+    const BG0VOFS_ADDR: u32 = 0x0400_0012;
+    const DISPCNT_ADDR: u32 = 0x0400_0000;
     const DMA0DAD_ADDR: u32 = 0x0400_00b4;
     const DMA0CNT_L_ADDR: u32 = 0x0400_00b8;
 
@@ -421,6 +514,33 @@ mod tests {
         assert_eq!(io.read_16(IME_ADDR), 1);
         assert_eq!(io.read_16(IE_ADDR), 0x1234);
         assert_eq!(io.read_16(WAITCNT_ADDR), 0x4321);
+    }
+
+    #[test]
+    fn display_register_helpers_decode_mode_frame_and_background_bits() {
+        let mut io = IoRegs::new();
+        io.write_16(DISPCNT_ADDR, 0x0511);
+
+        assert_eq!(io.display_mode(), 1);
+        assert!(io.display_frame_select());
+        assert!(io.bg_enabled(0));
+        assert!(!io.bg_enabled(1));
+        assert!(io.bg_enabled(2));
+    }
+
+    #[test]
+    fn background_registers_round_trip_and_apply_masks() {
+        let mut io = IoRegs::new();
+        io.write_16(BG0CNT_ADDR, 0x4104);
+        io.write_16(BG0HOFS_ADDR, 0x03ab);
+        io.write_16(BG0VOFS_ADDR, 0x02cd);
+
+        assert_eq!(io.read_16(BG0CNT_ADDR), 0x4104);
+        assert_eq!(io.bg_char_base_block(0), 1);
+        assert_eq!(io.bg_screen_base_block(0), 1);
+        assert_eq!(io.bg_size(0), 1);
+        assert_eq!(io.read_16(BG0HOFS_ADDR), 0x01ab);
+        assert_eq!(io.read_16(BG0VOFS_ADDR), 0x00cd);
     }
 
     #[test]

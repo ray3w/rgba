@@ -25,7 +25,11 @@ pub use rgba_arm7tdmi as arm7tdmi;
 pub use scheduler::{Event, EventKind, Scheduler};
 pub use timer::Timers;
 
-use rgba_arm7tdmi::Arm7tdmi;
+use rgba_arm7tdmi::{Arm7tdmi, Mode, SP};
+
+const USER_STACK_TOP: u32 = 0x0300_7f00;
+const IRQ_STACK_TOP: u32 = 0x0300_7fa0;
+const SUPERVISOR_STACK_TOP: u32 = 0x0300_7fe0;
 
 /// Minimal GBA core used to run the CPU against the real `core::Bus`.
 #[derive(Debug, Clone)]
@@ -50,6 +54,10 @@ impl Gba {
             dma: DmaController::new(),
             keypad: Keypad::new(),
         };
+        gba.cpu.write_reg_for_mode(Mode::User, SP, USER_STACK_TOP);
+        gba.cpu.write_reg_for_mode(Mode::Irq, SP, IRQ_STACK_TOP);
+        gba.cpu
+            .write_reg_for_mode(Mode::Supervisor, SP, SUPERVISOR_STACK_TOP);
         gba.bus.io_mut().set_vcount(0);
         gba.keypad.sync_to_io(gba.bus.io_mut());
         gba
@@ -130,7 +138,8 @@ impl Gba {
         let previous_dispstat = self.bus.io().dispstat();
         self.scheduler.advance(cycles);
         let ppu = &mut self.ppu;
-        self.bus.with_video(|io, vram| ppu.step(cycles, io, vram));
+        self.bus
+            .with_ppu_state(|io, vram, palette, _oam| ppu.step(cycles, io, vram, palette));
         let current_dispstat = self.bus.io().dispstat();
         let entered_hblank = (previous_dispstat & 0x0002) == 0 && (current_dispstat & 0x0002) != 0;
         let entered_vblank = (previous_dispstat & 0x0001) == 0 && (current_dispstat & 0x0001) != 0;
