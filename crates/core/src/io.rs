@@ -6,6 +6,16 @@ const BG0CNT_ADDR: u32 = 0x0400_0008;
 const BG0HOFS_ADDR: u32 = 0x0400_0010;
 const BG2PA_ADDR: u32 = 0x0400_0020;
 const BG2X_ADDR: u32 = 0x0400_0028;
+const WIN0H_ADDR: u32 = 0x0400_0040;
+const WIN1H_ADDR: u32 = WIN0H_ADDR + 2;
+const WIN0V_ADDR: u32 = 0x0400_0044;
+const WIN1V_ADDR: u32 = WIN0V_ADDR + 2;
+const WININ_ADDR: u32 = 0x0400_0048;
+const WINOUT_ADDR: u32 = 0x0400_004a;
+const MOSAIC_ADDR: u32 = 0x0400_004c;
+const BLDCNT_ADDR: u32 = 0x0400_0050;
+const BLDALPHA_ADDR: u32 = 0x0400_0052;
+const BLDY_ADDR: u32 = 0x0400_0054;
 
 const DMA0SAD_ADDR: u32 = 0x0400_00b0;
 const DMA0CNT_H_ADDR: u32 = 0x0400_00ba;
@@ -60,6 +70,14 @@ pub struct IoRegs {
     bg_affine_pd: [i16; 2],
     bg_ref_x: [i32; 2],
     bg_ref_y: [i32; 2],
+    window_h: [u16; 2],
+    window_v: [u16; 2],
+    win_in: u16,
+    win_out: u16,
+    mosaic: u16,
+    bldcnt: u16,
+    bldalpha: u16,
+    bldy: u16,
     keyinput: u16,
     keycnt: u16,
     timer_reload: [u16; 4],
@@ -96,6 +114,14 @@ impl IoRegs {
             bg_affine_pd: [0; 2],
             bg_ref_x: [0; 2],
             bg_ref_y: [0; 2],
+            window_h: [0; 2],
+            window_v: [0; 2],
+            win_in: 0,
+            win_out: 0,
+            mosaic: 0,
+            bldcnt: 0,
+            bldalpha: 0,
+            bldy: 0,
             keyinput: 0x03ff,
             keycnt: 0,
             timer_reload: [0; 4],
@@ -172,6 +198,18 @@ impl IoRegs {
         (self.dispcnt & (1 << 6)) != 0
     }
 
+    pub fn win0_enabled(&self) -> bool {
+        (self.dispcnt & (1 << 13)) != 0
+    }
+
+    pub fn win1_enabled(&self) -> bool {
+        (self.dispcnt & (1 << 14)) != 0
+    }
+
+    pub fn obj_window_enabled(&self) -> bool {
+        (self.dispcnt & (1 << 15)) != 0
+    }
+
     pub fn bg_control(&self, index: usize) -> u16 {
         self.bg_control[index]
     }
@@ -221,6 +259,38 @@ impl IoRegs {
     pub fn bg_affine_ref_point(&self, index: usize) -> Option<(i32, i32)> {
         let affine = affine_index(index)?;
         Some((self.bg_ref_x[affine], self.bg_ref_y[affine]))
+    }
+
+    pub fn window_h(&self, index: usize) -> u16 {
+        self.window_h[index]
+    }
+
+    pub fn window_v(&self, index: usize) -> u16 {
+        self.window_v[index]
+    }
+
+    pub fn win_in(&self) -> u16 {
+        self.win_in
+    }
+
+    pub fn win_out(&self) -> u16 {
+        self.win_out
+    }
+
+    pub fn mosaic(&self) -> u16 {
+        self.mosaic
+    }
+
+    pub fn bldcnt(&self) -> u16 {
+        self.bldcnt
+    }
+
+    pub fn bldalpha(&self) -> u16 {
+        self.bldalpha
+    }
+
+    pub fn bldy(&self) -> u16 {
+        self.bldy
     }
 
     pub fn ime_enabled(&self) -> bool {
@@ -336,6 +406,16 @@ impl IoRegs {
             DISPCNT_ADDR => self.dispcnt,
             DISPSTAT_ADDR => self.dispstat,
             VCOUNT_ADDR => self.vcount,
+            WIN0H_ADDR => self.window_h[0],
+            WIN1H_ADDR => self.window_h[1],
+            WIN0V_ADDR => self.window_v[0],
+            WIN1V_ADDR => self.window_v[1],
+            WININ_ADDR => self.win_in,
+            WINOUT_ADDR => self.win_out,
+            MOSAIC_ADDR => self.mosaic,
+            BLDCNT_ADDR => self.bldcnt,
+            BLDALPHA_ADDR => self.bldalpha,
+            BLDY_ADDR => self.bldy,
             KEYINPUT_ADDR => self.keyinput,
             KEYCNT_ADDR => self.keycnt,
             IE_ADDR => self.ie,
@@ -418,6 +498,16 @@ impl IoRegs {
                 self.set_vcount(self.vcount);
             }
             VCOUNT_ADDR => {}
+            WIN0H_ADDR => self.window_h[0] = val,
+            WIN1H_ADDR => self.window_h[1] = val,
+            WIN0V_ADDR => self.window_v[0] = val,
+            WIN1V_ADDR => self.window_v[1] = val,
+            WININ_ADDR => self.win_in = val & 0x3f3f,
+            WINOUT_ADDR => self.win_out = val & 0x3f3f,
+            MOSAIC_ADDR => self.mosaic = val,
+            BLDCNT_ADDR => self.bldcnt = val & 0x3fff,
+            BLDALPHA_ADDR => self.bldalpha = val & 0x1f1f,
+            BLDY_ADDR => self.bldy = val & 0x001f,
             KEYINPUT_ADDR => {}
             KEYCNT_ADDR => self.keycnt = val & 0xc3ff,
             IE_ADDR => self.ie = val,
@@ -631,9 +721,10 @@ fn dma_reg(addr: u32) -> Option<(usize, DmaRegPart)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        IoRegs, DISPSTAT_ADDR, DMA0CNT_H_ADDR, DMA0SAD_ADDR, IE_ADDR, IF_ADDR, IME_ADDR,
-        IRQ_KEYPAD, IRQ_VBLANK, IRQ_VCOUNT, KEYCNT_ADDR, KEYINPUT_ADDR, TM0CNT_H_ADDR,
-        TM0CNT_L_ADDR, VCOUNT_ADDR, WAITCNT_ADDR,
+        IoRegs, BLDALPHA_ADDR, BLDCNT_ADDR, BLDY_ADDR, DISPSTAT_ADDR, DMA0CNT_H_ADDR, DMA0SAD_ADDR,
+        IE_ADDR, IF_ADDR, IME_ADDR, IRQ_KEYPAD, IRQ_VBLANK, IRQ_VCOUNT, KEYCNT_ADDR, KEYINPUT_ADDR,
+        TM0CNT_H_ADDR, TM0CNT_L_ADDR, VCOUNT_ADDR, WAITCNT_ADDR, WIN0H_ADDR, WIN0V_ADDR,
+        WININ_ADDR, WINOUT_ADDR,
     };
 
     const BG0CNT_ADDR: u32 = 0x0400_0008;
@@ -680,6 +771,16 @@ mod tests {
 
         assert!(io.obj_enabled());
         assert!(io.obj_mapping_1d());
+    }
+
+    #[test]
+    fn display_register_helpers_decode_window_enable_bits() {
+        let mut io = IoRegs::new();
+        io.write_16(DISPCNT_ADDR, 0xe000);
+
+        assert!(io.win0_enabled());
+        assert!(io.win1_enabled());
+        assert!(io.obj_window_enabled());
     }
 
     #[test]
@@ -801,5 +902,31 @@ mod tests {
         assert_eq!(io.read_32(DMA0DAD_ADDR), 0x0300_0020);
         assert_eq!(io.read_16(DMA0CNT_L_ADDR), 8);
         assert_eq!(io.read_16(DMA0CNT_H_ADDR), 0x8400);
+    }
+
+    #[test]
+    fn window_registers_round_trip_with_masks() {
+        let mut io = IoRegs::new();
+        io.write_16(WIN0H_ADDR, 0x1020);
+        io.write_16(WIN0V_ADDR, 0x3040);
+        io.write_16(WININ_ADDR, 0xffff);
+        io.write_16(WINOUT_ADDR, 0xabcd);
+
+        assert_eq!(io.read_16(WIN0H_ADDR), 0x1020);
+        assert_eq!(io.read_16(WIN0V_ADDR), 0x3040);
+        assert_eq!(io.read_16(WININ_ADDR), 0x3f3f);
+        assert_eq!(io.read_16(WINOUT_ADDR), 0x2b0d);
+    }
+
+    #[test]
+    fn blend_registers_round_trip_with_masks() {
+        let mut io = IoRegs::new();
+        io.write_16(BLDCNT_ADDR, 0xffff);
+        io.write_16(BLDALPHA_ADDR, 0xffff);
+        io.write_16(BLDY_ADDR, 0xffff);
+
+        assert_eq!(io.read_16(BLDCNT_ADDR), 0x3fff);
+        assert_eq!(io.read_16(BLDALPHA_ADDR), 0x1f1f);
+        assert_eq!(io.read_16(BLDY_ADDR), 0x001f);
     }
 }

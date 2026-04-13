@@ -1,11 +1,19 @@
 mod bg;
 mod compose;
+mod effect;
 mod mode3;
 mod mode4;
+mod mode5;
 mod obj;
+mod window;
 
 use crate::io::IoRegs;
-use compose::{compose_layers_scanline, LayerPixel, TOTAL_LAYER_COUNT, BG_LAYER_COUNT};
+use compose::{
+    bg_target, compose_layers_scanline_with_effects, LayerPixel, BG_LAYER_COUNT, TARGET_BACKDROP,
+    TOTAL_LAYER_COUNT,
+};
+use effect::EffectConfig;
+use window::build_window_scanline;
 
 pub const SCREEN_WIDTH: usize = 240;
 pub const SCREEN_HEIGHT: usize = 160;
@@ -109,16 +117,26 @@ impl Ppu {
                 self.compose_with_obj(io, palette, vram, oam, y, layers);
             }
             3 if io.bg2_enabled() => {
-                mode3::render_scanline(&mut self.framebuffer, vram, y);
+                let mut layers = blank_bg_layers();
+                mode3::render_layer(&mut layers[2], io, vram, y);
+                self.compose_with_obj(io, palette, vram, oam, y, layers);
             }
             4 if io.bg2_enabled() => {
-                mode4::render_scanline(
-                    &mut self.framebuffer,
+                let mut layers = blank_bg_layers();
+                mode4::render_layer(
+                    &mut layers[2],
+                    io,
                     vram,
                     palette,
                     y,
                     io.display_frame_select(),
                 );
+                self.compose_with_obj(io, palette, vram, oam, y, layers);
+            }
+            5 if io.bg2_enabled() => {
+                let mut layers = blank_bg_layers();
+                mode5::render_layer(&mut layers[2], io, vram, y, io.display_frame_select());
+                self.compose_with_obj(io, palette, vram, oam, y, layers);
             }
             _ => fill_scanline(&mut self.framebuffer, y, backdrop_color(palette)),
         }
@@ -133,10 +151,20 @@ impl Ppu {
         y: usize,
         bg_layers: [[LayerPixel; SCREEN_WIDTH]; BG_LAYER_COUNT],
     ) {
-        let mut layers = [[LayerPixel::transparent(4, u8::MAX); SCREEN_WIDTH]; TOTAL_LAYER_COUNT];
+        let mut layers = [[LayerPixel::transparent(4, u8::MAX, TARGET_BACKDROP); SCREEN_WIDTH];
+            TOTAL_LAYER_COUNT];
         layers[..BG_LAYER_COUNT].copy_from_slice(&bg_layers);
         obj::render_obj_layer(&mut layers[BG_LAYER_COUNT], io, vram, palette, oam, y);
-        compose_layers_scanline(&mut self.framebuffer, y, backdrop_color(palette), &layers);
+        let window_masks = build_window_scanline(io, vram, oam, y);
+        let effects = EffectConfig::from_io(io);
+        compose_layers_scanline_with_effects(
+            &mut self.framebuffer,
+            y,
+            backdrop_color(palette),
+            &layers,
+            &window_masks,
+            effects,
+        );
     }
 
     fn finish_scanline(&mut self, io: &mut IoRegs) {
@@ -170,6 +198,15 @@ pub(crate) fn read_palette_color(palette: &[u8], index: usize) -> u16 {
 
 pub(crate) fn backdrop_color(palette: &[u8]) -> u16 {
     read_palette_color(palette, 0)
+}
+
+fn blank_bg_layers() -> [[LayerPixel; SCREEN_WIDTH]; BG_LAYER_COUNT] {
+    [
+        [LayerPixel::transparent(4, u8::MAX, bg_target(0)); SCREEN_WIDTH],
+        [LayerPixel::transparent(4, u8::MAX, bg_target(1)); SCREEN_WIDTH],
+        [LayerPixel::transparent(4, u8::MAX, bg_target(2)); SCREEN_WIDTH],
+        [LayerPixel::transparent(4, u8::MAX, bg_target(3)); SCREEN_WIDTH],
+    ]
 }
 
 pub fn rgb555_to_xrgb8888(pixel: u16) -> u32 {

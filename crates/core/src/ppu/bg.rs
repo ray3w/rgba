@@ -1,11 +1,11 @@
 use crate::io::IoRegs;
 
-use super::compose::{bg_order, clear_layer, LayerPixel, BG_LAYER_COUNT};
-use super::{read_palette_color, SCREEN_WIDTH};
-#[cfg(test)]
-use super::{backdrop_color, FRAME_PIXELS};
 #[cfg(test)]
 use super::compose::compose_layers_scanline;
+use super::compose::{bg_order, bg_target, clear_layer, LayerPixel, BG_LAYER_COUNT};
+#[cfg(test)]
+use super::{backdrop_color, FRAME_PIXELS};
+use super::{read_palette_color, SCREEN_WIDTH};
 
 const SCREEN_BLOCK_SIZE: usize = 0x0800;
 const CHAR_BLOCK_SIZE: usize = 0x4000;
@@ -92,9 +92,15 @@ pub fn render_mode2_layers(
 }
 
 fn blank_layers(io: &IoRegs) -> [[LayerPixel; SCREEN_WIDTH]; BG_LAYER_COUNT] {
-    let mut layers = [[LayerPixel::transparent(3, 3); SCREEN_WIDTH]; BG_LAYER_COUNT];
+    let mut layers = [[LayerPixel::transparent(3, 3, super::compose::TARGET_BACKDROP);
+        SCREEN_WIDTH]; BG_LAYER_COUNT];
     for (bg_index, layer) in layers.iter_mut().enumerate() {
-        clear_layer(layer, io.bg_priority(bg_index), bg_order(bg_index));
+        clear_layer(
+            layer,
+            io.bg_priority(bg_index),
+            bg_order(bg_index),
+            bg_target(bg_index),
+        );
     }
     layers
 }
@@ -109,7 +115,7 @@ fn render_text_bg_layer(
 ) {
     let priority = io.bg_priority(bg_index);
     let order = bg_order(bg_index);
-    clear_layer(layer, priority, order);
+    clear_layer(layer, priority, order, bg_target(bg_index));
 
     if !io.bg_enabled(bg_index) {
         return;
@@ -132,8 +138,13 @@ fn render_text_bg_layer(
         let world_x = x.wrapping_add(hofs);
         let wrapped_x = if bg_width == 0 { 0 } else { world_x % bg_width };
 
-        let screen_entry =
-            read_screen_entry(vram, screen_base, io.bg_size(bg_index), wrapped_x, wrapped_y);
+        let screen_entry = read_screen_entry(
+            vram,
+            screen_base,
+            io.bg_size(bg_index),
+            wrapped_x,
+            wrapped_y,
+        );
         let tile_index = (screen_entry & 0x03ff) as usize;
         let hflip = (screen_entry & (1 << 10)) != 0;
         let vflip = (screen_entry & (1 << 11)) != 0;
@@ -163,7 +174,7 @@ fn render_text_bg_layer(
         };
 
         if let Some(color) = color {
-            *pixel = LayerPixel::opaque(color, priority, order);
+            *pixel = LayerPixel::opaque(color, priority, order, bg_target(bg_index));
         }
     }
 }
@@ -178,7 +189,7 @@ fn render_affine_bg_layer(
 ) {
     let priority = io.bg_priority(bg_index);
     let order = bg_order(bg_index);
-    clear_layer(layer, priority, order);
+    clear_layer(layer, priority, order, bg_target(bg_index));
 
     if !io.bg_enabled(bg_index) {
         return;
@@ -213,7 +224,7 @@ fn render_affine_bg_layer(
         if let Some(color) =
             fetch_8bpp_tile_color(vram, palette, char_base, tile_index, tile_x, tile_y)
         {
-            *pixel = LayerPixel::opaque(color, priority, order);
+            *pixel = LayerPixel::opaque(color, priority, order, bg_target(bg_index));
         }
     }
 }
@@ -270,12 +281,7 @@ fn read_affine_screen_entry(
     usize::from(vram.get(entry_offset).copied().unwrap_or(0))
 }
 
-fn normalize_affine_coords(
-    x: i32,
-    y: i32,
-    dimension: usize,
-    wrap: bool,
-) -> Option<(usize, usize)> {
+fn normalize_affine_coords(x: i32, y: i32, dimension: usize, wrap: bool) -> Option<(usize, usize)> {
     let dimension = i32::try_from(dimension).ok()?;
     if wrap {
         Some((
@@ -342,9 +348,7 @@ fn read_u16(slice: &[u8], offset: usize) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        render_mode0_scanline, render_mode1_scanline, FRAME_PIXELS,
-    };
+    use super::{render_mode0_scanline, render_mode1_scanline, FRAME_PIXELS};
     use crate::io::IoRegs;
 
     const DISPCNT_ADDR: u32 = 0x0400_0000;
