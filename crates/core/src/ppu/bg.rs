@@ -1,13 +1,16 @@
 use crate::io::IoRegs;
 
-use super::compose::{
-    clear_layer, compose_bg_layers_scanline, LayerPixel, BG_LAYER_COUNT,
-};
-use super::{backdrop_color, read_palette_color, FRAME_PIXELS, SCREEN_WIDTH};
+use super::compose::{bg_order, clear_layer, LayerPixel, BG_LAYER_COUNT};
+use super::{read_palette_color, SCREEN_WIDTH};
+#[cfg(test)]
+use super::{backdrop_color, FRAME_PIXELS};
+#[cfg(test)]
+use super::compose::compose_layers_scanline;
 
 const SCREEN_BLOCK_SIZE: usize = 0x0800;
 const CHAR_BLOCK_SIZE: usize = 0x4000;
 
+#[cfg(test)]
 pub fn render_mode0_scanline(
     framebuffer: &mut [u16; FRAME_PIXELS],
     io: &IoRegs,
@@ -15,15 +18,11 @@ pub fn render_mode0_scanline(
     palette: &[u8],
     y: usize,
 ) {
-    let mut layers = blank_layers(io);
-
-    for (bg_index, layer) in layers.iter_mut().enumerate() {
-        render_text_bg_layer(layer, io, vram, palette, bg_index, y);
-    }
-
-    compose_bg_layers_scanline(framebuffer, y, backdrop_color(palette), &layers);
+    let layers = render_mode0_layers(io, vram, palette, y);
+    compose_layers_scanline(framebuffer, y, backdrop_color(palette), &layers);
 }
 
+#[cfg(test)]
 pub fn render_mode1_scanline(
     framebuffer: &mut [u16; FRAME_PIXELS],
     io: &IoRegs,
@@ -31,15 +30,12 @@ pub fn render_mode1_scanline(
     palette: &[u8],
     y: usize,
 ) {
-    let mut layers = blank_layers(io);
-
-    render_text_bg_layer(&mut layers[0], io, vram, palette, 0, y);
-    render_text_bg_layer(&mut layers[1], io, vram, palette, 1, y);
-    render_affine_bg_layer(&mut layers[2], io, vram, palette, 2, y);
-
-    compose_bg_layers_scanline(framebuffer, y, backdrop_color(palette), &layers);
+    let layers = render_mode1_layers(io, vram, palette, y);
+    compose_layers_scanline(framebuffer, y, backdrop_color(palette), &layers);
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn render_mode2_scanline(
     framebuffer: &mut [u16; FRAME_PIXELS],
     io: &IoRegs,
@@ -47,18 +43,58 @@ pub fn render_mode2_scanline(
     palette: &[u8],
     y: usize,
 ) {
+    let layers = render_mode2_layers(io, vram, palette, y);
+    compose_layers_scanline(framebuffer, y, backdrop_color(palette), &layers);
+}
+
+pub fn render_mode0_layers(
+    io: &IoRegs,
+    vram: &[u8],
+    palette: &[u8],
+    y: usize,
+) -> [[LayerPixel; SCREEN_WIDTH]; BG_LAYER_COUNT] {
+    let mut layers = blank_layers(io);
+
+    for (bg_index, layer) in layers.iter_mut().enumerate() {
+        render_text_bg_layer(layer, io, vram, palette, bg_index, y);
+    }
+
+    layers
+}
+
+pub fn render_mode1_layers(
+    io: &IoRegs,
+    vram: &[u8],
+    palette: &[u8],
+    y: usize,
+) -> [[LayerPixel; SCREEN_WIDTH]; BG_LAYER_COUNT] {
+    let mut layers = blank_layers(io);
+
+    render_text_bg_layer(&mut layers[0], io, vram, palette, 0, y);
+    render_text_bg_layer(&mut layers[1], io, vram, palette, 1, y);
+    render_affine_bg_layer(&mut layers[2], io, vram, palette, 2, y);
+
+    layers
+}
+
+pub fn render_mode2_layers(
+    io: &IoRegs,
+    vram: &[u8],
+    palette: &[u8],
+    y: usize,
+) -> [[LayerPixel; SCREEN_WIDTH]; BG_LAYER_COUNT] {
     let mut layers = blank_layers(io);
 
     render_affine_bg_layer(&mut layers[2], io, vram, palette, 2, y);
     render_affine_bg_layer(&mut layers[3], io, vram, palette, 3, y);
 
-    compose_bg_layers_scanline(framebuffer, y, backdrop_color(palette), &layers);
+    layers
 }
 
 fn blank_layers(io: &IoRegs) -> [[LayerPixel; SCREEN_WIDTH]; BG_LAYER_COUNT] {
     let mut layers = [[LayerPixel::transparent(3, 3); SCREEN_WIDTH]; BG_LAYER_COUNT];
     for (bg_index, layer) in layers.iter_mut().enumerate() {
-        clear_layer(layer, io.bg_priority(bg_index), bg_index as u8);
+        clear_layer(layer, io.bg_priority(bg_index), bg_order(bg_index));
     }
     layers
 }
@@ -72,7 +108,7 @@ fn render_text_bg_layer(
     y: usize,
 ) {
     let priority = io.bg_priority(bg_index);
-    let order = bg_index as u8;
+    let order = bg_order(bg_index);
     clear_layer(layer, priority, order);
 
     if !io.bg_enabled(bg_index) {
@@ -141,7 +177,7 @@ fn render_affine_bg_layer(
     y: usize,
 ) {
     let priority = io.bg_priority(bg_index);
-    let order = bg_index as u8;
+    let order = bg_order(bg_index);
     clear_layer(layer, priority, order);
 
     if !io.bg_enabled(bg_index) {

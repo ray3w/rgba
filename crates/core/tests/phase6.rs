@@ -6,9 +6,11 @@ const BG0CNT_ADDR: u32 = 0x0400_0008;
 const DISPCNT_ADDR: u32 = 0x0400_0000;
 const PALETTE_ADDR: u32 = 0x0500_0000;
 const VRAM_ADDR: u32 = 0x0600_0000;
+const OAM_ADDR: u32 = 0x0700_0000;
 
 const MODE4_BG2: u16 = 0x0404;
 const MODE0_BG0: u16 = 0x0100;
+const MODE0_OBJ_1D: u16 = 0x1040;
 const BG0CNT_SCREEN1_CHAR1: u16 = 0x0104;
 
 fn push_word(rom: &mut Vec<u8>, value: u32) {
@@ -79,4 +81,29 @@ fn gba_step_renders_mode0_bg0_scanline_from_text_tiles() {
     assert_eq!(gba.ppu().framebuffer()[1], 0x03e0);
     assert_eq!(gba.ppu().framebuffer()[2], 0x001f);
     assert_eq!(gba.ppu().framebuffer()[3], 0x03e0);
+}
+
+#[test]
+fn gba_step_renders_mode0_obj_scanline_from_oam_and_vram() {
+    let mut gba = Gba::new(Cartridge::new(idle_rom(1024)));
+    gba.cpu_mut().set_pc(0x0800_0000);
+    gba.bus_mut().write_16(DISPCNT_ADDR, MODE0_OBJ_1D);
+    gba.bus_mut().write_16(PALETTE_ADDR + 0x0200 + 2, 0x001f);
+    gba.bus_mut().write_16(PALETTE_ADDR + 0x0200 + 4, 0x03e0);
+
+    gba.bus_mut().write_16(OAM_ADDR, 0x0000);
+    gba.bus_mut().write_16(OAM_ADDR + 2, 0x0000);
+    gba.bus_mut().write_16(OAM_ADDR + 4, 0x0000);
+
+    gba.bus_mut().write_8(VRAM_ADDR + 0x1_0000, 0x21);
+    gba.bus_mut().write_8(VRAM_ADDR + 0x1_0000 + 1, 0x21);
+    gba.bus_mut().write_8(VRAM_ADDR + 0x1_0000 + 2, 0x21);
+    gba.bus_mut().write_8(VRAM_ADDR + 0x1_0000 + 3, 0x21);
+
+    for _ in 0..960 {
+        gba.step();
+    }
+
+    assert_eq!(gba.ppu().framebuffer()[0], 0x001f);
+    assert_eq!(gba.ppu().framebuffer()[1], 0x03e0);
 }

@@ -2,8 +2,10 @@ mod bg;
 mod compose;
 mod mode3;
 mod mode4;
+mod obj;
 
 use crate::io::IoRegs;
+use compose::{compose_layers_scanline, LayerPixel, TOTAL_LAYER_COUNT, BG_LAYER_COUNT};
 
 pub const SCREEN_WIDTH: usize = 240;
 pub const SCREEN_HEIGHT: usize = 160;
@@ -57,7 +59,7 @@ impl Ppu {
         ready
     }
 
-    pub fn step(&mut self, cycles: u32, io: &mut IoRegs, vram: &[u8], palette: &[u8]) {
+    pub fn step(&mut self, cycles: u32, io: &mut IoRegs, vram: &[u8], palette: &[u8], oam: &[u8]) {
         let mut remaining = cycles;
 
         while remaining > 0 {
@@ -73,7 +75,7 @@ impl Ppu {
             if self.line_cycles == HDRAW_CYCLES {
                 io.set_hblank(true);
                 if self.vcount < SCREEN_HEIGHT as u16 {
-                    self.render_visible_scanline(io, vram, palette);
+                    self.render_visible_scanline(io, vram, palette, oam);
                 }
             }
 
@@ -91,12 +93,21 @@ impl Ppu {
         }
     }
 
-    fn render_visible_scanline(&mut self, io: &IoRegs, vram: &[u8], palette: &[u8]) {
+    fn render_visible_scanline(&mut self, io: &IoRegs, vram: &[u8], palette: &[u8], oam: &[u8]) {
         let y = self.vcount as usize;
         match io.display_mode() {
-            0 => bg::render_mode0_scanline(&mut self.framebuffer, io, vram, palette, y),
-            1 => bg::render_mode1_scanline(&mut self.framebuffer, io, vram, palette, y),
-            2 => bg::render_mode2_scanline(&mut self.framebuffer, io, vram, palette, y),
+            0 => {
+                let layers = bg::render_mode0_layers(io, vram, palette, y);
+                self.compose_with_obj(io, palette, vram, oam, y, layers);
+            }
+            1 => {
+                let layers = bg::render_mode1_layers(io, vram, palette, y);
+                self.compose_with_obj(io, palette, vram, oam, y, layers);
+            }
+            2 => {
+                let layers = bg::render_mode2_layers(io, vram, palette, y);
+                self.compose_with_obj(io, palette, vram, oam, y, layers);
+            }
             3 if io.bg2_enabled() => {
                 mode3::render_scanline(&mut self.framebuffer, vram, y);
             }
@@ -111,6 +122,21 @@ impl Ppu {
             }
             _ => fill_scanline(&mut self.framebuffer, y, backdrop_color(palette)),
         }
+    }
+
+    fn compose_with_obj(
+        &mut self,
+        io: &IoRegs,
+        palette: &[u8],
+        vram: &[u8],
+        oam: &[u8],
+        y: usize,
+        bg_layers: [[LayerPixel; SCREEN_WIDTH]; BG_LAYER_COUNT],
+    ) {
+        let mut layers = [[LayerPixel::transparent(4, u8::MAX); SCREEN_WIDTH]; TOTAL_LAYER_COUNT];
+        layers[..BG_LAYER_COUNT].copy_from_slice(&bg_layers);
+        obj::render_obj_layer(&mut layers[BG_LAYER_COUNT], io, vram, palette, oam, y);
+        compose_layers_scanline(&mut self.framebuffer, y, backdrop_color(palette), &layers);
     }
 
     fn finish_scanline(&mut self, io: &mut IoRegs) {
@@ -191,7 +217,8 @@ mod tests {
         write_pixel(&mut vram, 0, 0, 0x001f);
         write_pixel(&mut vram, 1, 0, 0x03e0);
 
-        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette);
+        let oam = vec![0; 0x400];
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette, &oam);
 
         assert_eq!(ppu.framebuffer()[0], 0x001f);
         assert_eq!(ppu.framebuffer()[1], 0x03e0);
@@ -210,7 +237,8 @@ mod tests {
         vram[0] = 1;
         vram[1] = 2;
 
-        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette);
+        let oam = vec![0; 0x400];
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette, &oam);
 
         assert_eq!(ppu.framebuffer()[0], 0x001f);
         assert_eq!(ppu.framebuffer()[1], 0x03e0);
@@ -236,7 +264,8 @@ mod tests {
         // Screen block 1 entry 0 -> tile 0.
         write_u16(&mut vram, 0x0800, 0x0000);
 
-        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette);
+        let oam = vec![0; 0x400];
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette, &oam);
 
         assert_eq!(ppu.framebuffer()[0], 0x001f);
         assert_eq!(ppu.framebuffer()[1], 0x03e0);
@@ -269,7 +298,8 @@ mod tests {
         vram[0x4003] = 0x22;
         write_u16(&mut vram, 0x0800, 0x0000);
 
-        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette);
+        let oam = vec![0; 0x400];
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette, &oam);
 
         assert_eq!(ppu.framebuffer()[0], 0x03e0);
         assert_eq!(ppu.framebuffer()[1], 0x03e0);
@@ -294,7 +324,8 @@ mod tests {
         vram[0x4001] = 2;
         vram[0x0800] = 0;
 
-        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette);
+        let oam = vec![0; 0x400];
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette, &oam);
 
         assert_eq!(ppu.framebuffer()[0], 0x001f);
         assert_eq!(ppu.framebuffer()[1], 0x03e0);
@@ -307,11 +338,13 @@ mod tests {
         let vram = vec![0; 0x18000];
         let palette = vec![0; 0x400];
 
+        let oam = vec![0; 0x400];
         ppu.step(
             SCANLINE_CYCLES * SCREEN_HEIGHT as u32,
             &mut io,
             &vram,
             &palette,
+            &oam,
         );
 
         assert_eq!(ppu.vcount(), SCREEN_HEIGHT as u16);
@@ -332,5 +365,25 @@ mod tests {
     fn framebuffer_size_matches_visible_screen() {
         let ppu = Ppu::new();
         assert_eq!(ppu.framebuffer().len(), FRAME_PIXELS);
+    }
+
+    #[test]
+    fn mode0_obj_pixels_render_on_top_of_backdrop() {
+        let mut ppu = Ppu::new();
+        let mut io = IoRegs::new();
+        let mut vram = vec![0; 0x18000];
+        let mut palette = vec![0; 0x400];
+        let mut oam = vec![0; 0x400];
+
+        io.write_16(0x0400_0000, 0x1040);
+        write_u16(&mut palette, 0x200 + 2, 0x001f);
+        write_u16(&mut oam, 0x0000, 0x0000);
+        write_u16(&mut oam, 0x0002, 0x0000);
+        write_u16(&mut oam, 0x0004, 0x0000);
+        vram[0x1_0000] = 0x11;
+
+        ppu.step(HDRAW_CYCLES, &mut io, &vram, &palette, &oam);
+
+        assert_eq!(ppu.framebuffer()[0], 0x001f);
     }
 }

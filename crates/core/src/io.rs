@@ -164,6 +164,14 @@ impl IoRegs {
         self.bg_enabled(2)
     }
 
+    pub fn obj_enabled(&self) -> bool {
+        (self.dispcnt & (1 << 12)) != 0
+    }
+
+    pub fn obj_mapping_1d(&self) -> bool {
+        (self.dispcnt & (1 << 6)) != 0
+    }
+
     pub fn bg_control(&self, index: usize) -> u16 {
         self.bg_control[index]
     }
@@ -654,13 +662,24 @@ mod tests {
     #[test]
     fn display_register_helpers_decode_mode_frame_and_background_bits() {
         let mut io = IoRegs::new();
-        io.write_16(DISPCNT_ADDR, 0x0511);
+        io.write_16(DISPCNT_ADDR, 0x1511);
 
         assert_eq!(io.display_mode(), 1);
         assert!(io.display_frame_select());
         assert!(io.bg_enabled(0));
         assert!(!io.bg_enabled(1));
         assert!(io.bg_enabled(2));
+        assert!(io.obj_enabled());
+        assert!(!io.obj_mapping_1d());
+    }
+
+    #[test]
+    fn display_register_helpers_decode_obj_mapping_mode() {
+        let mut io = IoRegs::new();
+        io.write_16(DISPCNT_ADDR, 0x1040);
+
+        assert!(io.obj_enabled());
+        assert!(io.obj_mapping_1d());
     }
 
     #[test]

@@ -139,7 +139,7 @@ impl Gba {
         self.scheduler.advance(cycles);
         let ppu = &mut self.ppu;
         self.bus
-            .with_ppu_state(|io, vram, palette, _oam| ppu.step(cycles, io, vram, palette));
+            .with_ppu_state(|io, vram, palette, oam| ppu.step(cycles, io, vram, palette, oam));
         let current_dispstat = self.bus.io().dispstat();
         let entered_hblank = (previous_dispstat & 0x0002) == 0 && (current_dispstat & 0x0002) != 0;
         let entered_vblank = (previous_dispstat & 0x0001) == 0 && (current_dispstat & 0x0001) != 0;

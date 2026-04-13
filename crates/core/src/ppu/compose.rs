@@ -1,6 +1,9 @@
 use super::{FRAME_PIXELS, SCREEN_WIDTH};
 
 pub const BG_LAYER_COUNT: usize = 4;
+pub const OBJ_LAYER_COUNT: usize = 1;
+pub const TOTAL_LAYER_COUNT: usize = BG_LAYER_COUNT + OBJ_LAYER_COUNT;
+pub const BG_ORDER_BASE: u8 = 0x80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayerPixel {
@@ -34,11 +37,15 @@ pub fn clear_layer(layer: &mut [LayerPixel; SCREEN_WIDTH], priority: u8, order: 
     layer.fill(LayerPixel::transparent(priority, order));
 }
 
-pub fn compose_bg_layers_scanline(
+pub const fn bg_order(index: usize) -> u8 {
+    BG_ORDER_BASE + index as u8
+}
+
+pub fn compose_layers_scanline<const N: usize>(
     framebuffer: &mut [u16; FRAME_PIXELS],
     y: usize,
     backdrop: u16,
-    layers: &[[LayerPixel; SCREEN_WIDTH]; BG_LAYER_COUNT],
+    layers: &[[LayerPixel; SCREEN_WIDTH]; N],
 ) {
     let line_start = y * SCREEN_WIDTH;
 
@@ -64,7 +71,10 @@ pub fn compose_bg_layers_scanline(
 
 #[cfg(test)]
 mod tests {
-    use super::{clear_layer, compose_bg_layers_scanline, LayerPixel, BG_LAYER_COUNT};
+    use super::{
+        bg_order, clear_layer, compose_layers_scanline, LayerPixel, BG_LAYER_COUNT,
+        TOTAL_LAYER_COUNT,
+    };
     use crate::ppu::{FRAME_PIXELS, SCREEN_WIDTH};
 
     #[test]
@@ -72,12 +82,12 @@ mod tests {
         let mut framebuffer = Box::new([0; FRAME_PIXELS]);
         let mut layers = [[LayerPixel::transparent(3, 3); SCREEN_WIDTH]; BG_LAYER_COUNT];
 
-        clear_layer(&mut layers[1], 1, 1);
-        clear_layer(&mut layers[2], 0, 2);
-        layers[1][0] = LayerPixel::opaque(0x001f, 1, 1);
-        layers[2][0] = LayerPixel::opaque(0x03e0, 0, 2);
+        clear_layer(&mut layers[1], 1, bg_order(1));
+        clear_layer(&mut layers[2], 0, bg_order(2));
+        layers[1][0] = LayerPixel::opaque(0x001f, 1, bg_order(1));
+        layers[2][0] = LayerPixel::opaque(0x03e0, 0, bg_order(2));
 
-        compose_bg_layers_scanline(&mut framebuffer, 0, 0x7c00, &layers);
+        compose_layers_scanline(&mut framebuffer, 0, 0x7c00, &layers);
 
         assert_eq!(framebuffer[0], 0x03e0);
     }
@@ -87,12 +97,12 @@ mod tests {
         let mut framebuffer = Box::new([0; FRAME_PIXELS]);
         let mut layers = [[LayerPixel::transparent(3, 3); SCREEN_WIDTH]; BG_LAYER_COUNT];
 
-        clear_layer(&mut layers[0], 2, 0);
-        clear_layer(&mut layers[1], 2, 1);
-        layers[0][0] = LayerPixel::opaque(0x001f, 2, 0);
-        layers[1][0] = LayerPixel::opaque(0x03e0, 2, 1);
+        clear_layer(&mut layers[0], 2, bg_order(0));
+        clear_layer(&mut layers[1], 2, bg_order(1));
+        layers[0][0] = LayerPixel::opaque(0x001f, 2, bg_order(0));
+        layers[1][0] = LayerPixel::opaque(0x03e0, 2, bg_order(1));
 
-        compose_bg_layers_scanline(&mut framebuffer, 0, 0x7c00, &layers);
+        compose_layers_scanline(&mut framebuffer, 0, 0x7c00, &layers);
 
         assert_eq!(framebuffer[0], 0x001f);
     }
@@ -102,8 +112,23 @@ mod tests {
         let mut framebuffer = Box::new([0; FRAME_PIXELS]);
         let layers = [[LayerPixel::transparent(3, 3); SCREEN_WIDTH]; BG_LAYER_COUNT];
 
-        compose_bg_layers_scanline(&mut framebuffer, 0, 0x56b5, &layers);
+        compose_layers_scanline(&mut framebuffer, 0, 0x56b5, &layers);
 
         assert_eq!(framebuffer[0], 0x56b5);
+    }
+
+    #[test]
+    fn obj_order_beats_background_when_priorities_tie() {
+        let mut framebuffer = Box::new([0; FRAME_PIXELS]);
+        let mut layers = [[LayerPixel::transparent(3, 3); SCREEN_WIDTH]; TOTAL_LAYER_COUNT];
+
+        clear_layer(&mut layers[0], 1, bg_order(0));
+        clear_layer(&mut layers[BG_LAYER_COUNT], 1, 7);
+        layers[0][0] = LayerPixel::opaque(0x001f, 1, bg_order(0));
+        layers[BG_LAYER_COUNT][0] = LayerPixel::opaque(0x03e0, 1, 7);
+
+        compose_layers_scanline(&mut framebuffer, 0, 0x7c00, &layers);
+
+        assert_eq!(framebuffer[0], 0x03e0);
     }
 }
