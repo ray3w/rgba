@@ -6,3 +6,6 @@ edition.workspace = true
 [dependencies]
 rgba-arm7tdmi = { path = "../arm7tdmi" }
 rgba-utils = { path = "../utils" }
+
+[dev-dependencies]
+png = "0.17"

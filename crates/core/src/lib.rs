@@ -5,18 +5,25 @@
 
 pub mod bus;
 pub mod cartridge;
+pub mod dma;
+pub mod interrupt;
 pub mod io;
+pub mod keypad;
 pub mod mem;
 pub mod ppu;
 pub mod scheduler;
+pub mod timer;
 
 pub use bus::Bus;
 pub use cartridge::Cartridge;
+pub use dma::DmaController;
 pub use io::IoRegs;
+pub use keypad::{Button, Keypad};
 pub use mem::{BiosLoadError, Memory};
 pub use ppu::{rgb555_to_xrgb8888, Ppu, FRAME_PIXELS, SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use rgba_arm7tdmi as arm7tdmi;
 pub use scheduler::{Event, EventKind, Scheduler};
+pub use timer::Timers;
 
 use rgba_arm7tdmi::Arm7tdmi;
 
@@ -27,6 +34,9 @@ pub struct Gba {
     bus: Bus,
     ppu: Ppu,
     scheduler: Scheduler,
+    timers: Timers,
+    dma: DmaController,
+    keypad: Keypad,
 }
 
 impl Gba {
@@ -36,8 +46,12 @@ impl Gba {
             bus: Bus::new(cartridge),
             ppu: Ppu::new(),
             scheduler: Scheduler::new(),
+            timers: Timers::new(),
+            dma: DmaController::new(),
+            keypad: Keypad::new(),
         };
         gba.bus.io_mut().set_vcount(0);
+        gba.keypad.sync_to_io(gba.bus.io_mut());
         gba
     }
 
@@ -89,11 +103,42 @@ impl Gba {
         &mut self.ppu
     }
 
+    pub fn timers(&self) -> &Timers {
+        &self.timers
+    }
+
+    pub fn dma(&self) -> &DmaController {
+        &self.dma
+    }
+
+    pub fn keypad(&self) -> &Keypad {
+        &self.keypad
+    }
+
+    pub fn set_button_pressed(&mut self, button: Button, pressed: bool) {
+        self.keypad.set_pressed(button, pressed);
+        self.keypad.sync_to_io(self.bus.io_mut());
+    }
+
     pub fn step(&mut self) -> u32 {
-        let cycles = self.cpu.step(&mut self.bus);
+        let cycles = if interrupt::service_irq(&mut self.cpu, self.bus.io()) {
+            2
+        } else {
+            self.cpu.step(&mut self.bus)
+        };
+
+        let previous_dispstat = self.bus.io().dispstat();
         self.scheduler.advance(cycles);
         let ppu = &mut self.ppu;
         self.bus.with_video(|io, vram| ppu.step(cycles, io, vram));
+        let current_dispstat = self.bus.io().dispstat();
+        let entered_hblank = (previous_dispstat & 0x0002) == 0 && (current_dispstat & 0x0002) != 0;
+        let entered_vblank = (previous_dispstat & 0x0001) == 0 && (current_dispstat & 0x0001) != 0;
+
+        self.timers.step(cycles, self.bus.io_mut());
+        self.dma
+            .service(&mut self.bus, entered_hblank, entered_vblank);
+        self.keypad.sync_to_io(self.bus.io_mut());
 
         while let Some(event) = self.scheduler.pop_pending() {
             self.handle_event(event.kind);
