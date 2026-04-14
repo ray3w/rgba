@@ -3,10 +3,15 @@ use rgba_core::arm7tdmi::Mode;
 use rgba_core::{BiosBackend, Cartridge, Gba};
 
 const DISPCNT_ADDR: u32 = 0x0400_0000;
+const DISPSTAT_ADDR: u32 = 0x0400_0004;
 const PALETTE_ADDR: u32 = 0x0500_0000;
 const VRAM_ADDR: u32 = 0x0600_0000;
 const OAM_ADDR: u32 = 0x0700_0000;
+const IE_ADDR: u32 = 0x0400_0200;
+const IME_ADDR: u32 = 0x0400_0208;
+const REG_IFBIOS_ADDR: u32 = 0x03ff_fff8;
 const ROM_ENTRY: u32 = 0x0800_0000;
+const IRQ_VBLANK: u16 = 1 << 0;
 
 fn arm_rom(words: &[u32]) -> Vec<u8> {
     let mut rom = Vec::with_capacity(words.len() * 4);
@@ -82,4 +87,78 @@ fn loading_external_bios_switches_bios_backend() {
     gba.load_bios(&[0; 16]).unwrap();
 
     assert_eq!(gba.bios().backend(), BiosBackend::External);
+}
+
+#[test]
+fn vblank_intr_wait_blocks_until_irq_and_returns_to_thumb_caller() {
+    let mut rom = vec![0; 6];
+    rom[0..2].copy_from_slice(&0xdf05u16.to_le_bytes()); // SWI 0x05
+    rom[2..4].copy_from_slice(&0x1c08u16.to_le_bytes()); // ADDS r0, r1, #0
+    rom[4..6].copy_from_slice(&0xe7feu16.to_le_bytes()); // B .
+    let mut gba = Gba::new(Cartridge::new(rom));
+    gba.cpu_mut().set_pc(ROM_ENTRY);
+    gba.cpu_mut().set_thumb(true);
+    gba.cpu_mut().write_reg(1, 7);
+    gba.bus_mut().write_16(DISPSTAT_ADDR, 1 << 3);
+    gba.bus_mut().write_16(IE_ADDR, IRQ_VBLANK);
+    gba.bus_mut().write_16(IME_ADDR, 1);
+
+    gba.step();
+    assert_eq!(gba.cpu().mode(), Mode::Supervisor);
+    assert_eq!(gba.cpu().pc(), 0x0000_0008);
+
+    gba.step();
+    assert!(gba.cpu().is_thumb());
+    assert_eq!(gba.cpu().pc(), ROM_ENTRY + 2);
+
+    gba.step();
+    assert_eq!(gba.cpu().pc(), ROM_ENTRY + 2);
+
+    gba.bus_mut().io_mut().request_interrupt(IRQ_VBLANK);
+    gba.step();
+    assert_eq!(gba.cpu().mode(), Mode::Irq);
+    assert_eq!(gba.cpu().pc(), 0x0000_0018);
+
+    gba.step();
+    assert_eq!(gba.cpu().mode(), Mode::User);
+    assert!(gba.cpu().is_thumb());
+    assert_eq!(gba.cpu().pc(), ROM_ENTRY + 2);
+    assert_eq!(gba.bus_mut().read_16(REG_IFBIOS_ADDR), IRQ_VBLANK);
+
+    gba.step();
+    assert_eq!(gba.cpu().read_reg(0), 7);
+}
+
+#[test]
+fn intr_wait_with_flag_clear_ignores_stale_ifbios_bits() {
+    let rom = arm_rom(&[
+        0xef00_0004, // SWI 0x04
+        0xeaff_fffe, // idle loop
+    ]);
+    let mut gba = Gba::new(Cartridge::new(rom));
+    gba.cpu_mut().set_pc(ROM_ENTRY);
+    gba.cpu_mut().write_reg(0, 1);
+    gba.cpu_mut().write_reg(1, IRQ_VBLANK.into());
+    gba.bus_mut().write_16(IE_ADDR, IRQ_VBLANK);
+    gba.bus_mut().write_16(IME_ADDR, 1);
+    gba.bus_mut().write_16(REG_IFBIOS_ADDR, IRQ_VBLANK);
+
+    gba.step();
+    assert_eq!(gba.cpu().mode(), Mode::Supervisor);
+    assert_eq!(gba.cpu().pc(), 0x0000_0008);
+
+    gba.step();
+    assert_eq!(gba.bus_mut().read_16(REG_IFBIOS_ADDR), 0);
+    assert_eq!(gba.cpu().pc(), ROM_ENTRY + 4);
+
+    gba.step();
+    assert_eq!(gba.cpu().pc(), ROM_ENTRY + 4);
+
+    gba.bus_mut().io_mut().request_interrupt(IRQ_VBLANK);
+    gba.step();
+    assert_eq!(gba.cpu().mode(), Mode::Irq);
+
+    gba.step();
+    assert_eq!(gba.cpu().mode(), Mode::User);
+    assert_eq!(gba.bus_mut().read_16(REG_IFBIOS_ADDR), IRQ_VBLANK);
 }
