@@ -53,6 +53,10 @@ impl Bus {
         self.memory.load_bios(bios)
     }
 
+    pub fn has_external_bios(&self) -> bool {
+        self.memory.has_loaded_bios()
+    }
+
     pub fn io(&self) -> &IoRegs {
         &self.io
     }
@@ -86,6 +90,27 @@ impl Bus {
 
     pub fn cartridge(&self) -> &Cartridge {
         &self.cartridge
+    }
+
+    pub fn register_ram_reset(&mut self, reset_mask: u8) {
+        if (reset_mask & 0x01) != 0 {
+            self.memory.clear_ewram();
+        }
+        if (reset_mask & 0x02) != 0 {
+            self.memory.clear_iwram();
+        }
+        if (reset_mask & 0x04) != 0 {
+            self.palette.fill(0);
+        }
+        if (reset_mask & 0x08) != 0 {
+            self.vram.fill(0);
+        }
+        if (reset_mask & 0x10) != 0 {
+            self.oam.fill(0);
+        }
+        if (reset_mask & 0xe0) != 0 {
+            self.io.register_ram_reset(reset_mask);
+        }
     }
 
     pub fn read_32_debug(&self, addr: u32) -> u32 {
@@ -286,5 +311,25 @@ mod tests {
         assert_eq!(bus.read_32(0x0800_0000), 0x1234_5678);
         assert_eq!(bus.read_32(0x0200_0000), 0xdead_beef);
         assert_eq!(bus.read_32(0x0300_0000), 0xaabb_ccdd);
+    }
+
+    #[test]
+    fn register_ram_reset_clears_selected_memory_blocks() {
+        let mut bus = Bus::new(Cartridge::new(vec![0; 4]));
+        bus.write_32(0x0200_0000, 0x1234_5678);
+        bus.write_32(0x0300_0000, 0x89ab_cdef);
+        bus.write_16(0x0500_0000, 0x001f);
+        bus.write_16(0x0600_0000, 0x03e0);
+        bus.write_16(0x0700_0000, 0x7c00);
+        bus.write_16(0x0400_0000, 0x0403);
+
+        bus.register_ram_reset(0xff);
+
+        assert_eq!(bus.read_32(0x0200_0000), 0);
+        assert_eq!(bus.read_32(0x0300_0000), 0);
+        assert_eq!(bus.read_16(0x0500_0000), 0);
+        assert_eq!(bus.read_16(0x0600_0000), 0);
+        assert_eq!(bus.read_16(0x0700_0000), 0);
+        assert_eq!(bus.read_16(0x0400_0000), 0);
     }
 }

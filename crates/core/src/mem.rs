@@ -6,6 +6,7 @@ const IWRAM_SIZE: usize = 0x8000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Memory {
     bios: Box<[u8; BIOS_SIZE]>,
+    bios_loaded: bool,
     ewram: Box<[u8; EWRAM_SIZE]>,
     iwram: Box<[u8; IWRAM_SIZE]>,
 }
@@ -20,6 +21,7 @@ impl Memory {
     pub fn new() -> Self {
         Self {
             bios: Box::new([0; BIOS_SIZE]),
+            bios_loaded: false,
             ewram: Box::new([0; EWRAM_SIZE]),
             iwram: Box::new([0; IWRAM_SIZE]),
         }
@@ -35,7 +37,12 @@ impl Memory {
 
         self.bios.fill(0);
         self.bios[..bios.len()].copy_from_slice(bios);
+        self.bios_loaded = true;
         Ok(())
+    }
+
+    pub fn has_loaded_bios(&self) -> bool {
+        self.bios_loaded
     }
 
     pub fn read_bios_8(&self, addr: u32) -> u8 {
@@ -75,6 +82,10 @@ impl Memory {
         write_u32(&mut self.ewram[..], (addr as usize) & (EWRAM_SIZE - 1), val);
     }
 
+    pub fn clear_ewram(&mut self) {
+        self.ewram.fill(0);
+    }
+
     pub fn read_iwram_8(&self, addr: u32) -> u8 {
         self.iwram[(addr as usize) & (IWRAM_SIZE - 1)]
     }
@@ -98,6 +109,10 @@ impl Memory {
 
     pub fn write_iwram_32(&mut self, addr: u32, val: u32) {
         write_u32(&mut self.iwram[..], (addr as usize) & (IWRAM_SIZE - 1), val);
+    }
+
+    pub fn clear_iwram(&mut self) {
+        self.iwram.fill(0);
     }
 }
 
@@ -162,5 +177,15 @@ mod tests {
                 max: 0x4000
             }
         );
+    }
+
+    #[test]
+    fn load_bios_marks_external_bios_as_present() {
+        let mut mem = Memory::new();
+        assert!(!mem.has_loaded_bios());
+
+        mem.load_bios(&[1, 2, 3, 4]).unwrap();
+
+        assert!(mem.has_loaded_bios());
     }
 }

@@ -3,6 +3,7 @@
 //! The `rgba-core` crate assembles the CPU, bus, scheduler, MMIO block, and
 //! early PPU into the first real machine-level execution path.
 
+pub mod bios;
 pub mod bus;
 pub mod cartridge;
 pub mod dma;
@@ -15,6 +16,7 @@ pub mod scheduler;
 pub mod timer;
 
 pub use bus::Bus;
+pub use bios::{Bios, BiosBackend, BiosError};
 pub use cartridge::Cartridge;
 pub use dma::DmaController;
 pub use io::IoRegs;
@@ -36,6 +38,7 @@ const SUPERVISOR_STACK_TOP: u32 = 0x0300_7fe0;
 pub struct Gba {
     cpu: Arm7tdmi,
     bus: Bus,
+    bios: Bios,
     ppu: Ppu,
     scheduler: Scheduler,
     timers: Timers,
@@ -48,6 +51,7 @@ impl Gba {
         let mut gba = Self {
             cpu: Arm7tdmi::new(),
             bus: Bus::new(cartridge),
+            bios: Bios::new(),
             ppu: Ppu::new(),
             scheduler: Scheduler::new(),
             timers: Timers::new(),
@@ -76,7 +80,9 @@ impl Gba {
     }
 
     pub fn load_bios(&mut self, bios: &[u8]) -> Result<(), BiosLoadError> {
-        self.bus.load_bios(bios)
+        self.bus.load_bios(bios)?;
+        self.bios.use_external();
+        Ok(())
     }
 
     pub fn bus(&self) -> &Bus {
@@ -85,6 +91,14 @@ impl Gba {
 
     pub fn bus_mut(&mut self) -> &mut Bus {
         &mut self.bus
+    }
+
+    pub fn bios(&self) -> &Bios {
+        &self.bios
+    }
+
+    pub fn bios_mut(&mut self) -> &mut Bios {
+        &mut self.bios
     }
 
     pub fn scheduler(&self) -> &Scheduler {
@@ -129,7 +143,13 @@ impl Gba {
     }
 
     pub fn step(&mut self) -> u32 {
-        let cycles = if interrupt::service_irq(&mut self.cpu, self.bus.io()) {
+        let cycles = if let Some(cycles) = self
+            .bios
+            .handle_step(&mut self.cpu, &mut self.bus)
+            .expect("BIOS HLE handling failed")
+        {
+            cycles
+        } else if interrupt::service_irq(&mut self.cpu, self.bus.io()) {
             2
         } else {
             self.cpu.step(&mut self.bus)

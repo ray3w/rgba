@@ -301,6 +301,16 @@ impl IoRegs {
         self.keyinput = value & 0x03ff;
     }
 
+    pub fn register_ram_reset(&mut self, reset_mask: u8) {
+        if (reset_mask & 0xe0) == 0 {
+            return;
+        }
+
+        let keyinput = self.keyinput;
+        *self = Self::new();
+        self.keyinput = keyinput;
+    }
+
     pub fn timer_reload(&self, index: usize) -> u16 {
         self.timer_reload[index]
     }
@@ -928,5 +938,21 @@ mod tests {
         assert_eq!(io.read_16(BLDCNT_ADDR), 0x3fff);
         assert_eq!(io.read_16(BLDALPHA_ADDR), 0x1f1f);
         assert_eq!(io.read_16(BLDY_ADDR), 0x001f);
+    }
+
+    #[test]
+    fn register_ram_reset_preserves_keyinput_but_clears_control_state() {
+        let mut io = IoRegs::new();
+        io.write_16(IME_ADDR, 1);
+        io.write_16(IE_ADDR, 0x1234);
+        io.write_16(DISPCNT_ADDR, 0x0403);
+        io.set_keyinput(0x03fe);
+
+        io.register_ram_reset(0xe0);
+
+        assert_eq!(io.ime(), 0);
+        assert_eq!(io.ie(), 0);
+        assert_eq!(io.dispcnt(), 0);
+        assert_eq!(io.keyinput(), 0x03fe);
     }
 }
